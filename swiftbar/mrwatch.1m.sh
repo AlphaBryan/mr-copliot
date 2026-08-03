@@ -85,18 +85,20 @@ else
       if [ "$h" -gt 0 ]; then wait_txt="${h}h${m}m"; else wait_txt="${m}m"; fi
     fi
 
+    # Ligne parente = toggle (pas de href) : un clic déplie le sous-menu, n'ouvre pas la MR.
+    # Seul le bouton « 🌐 Ouvrir la MR » ci-dessous ouvre le navigateur.
     if [ "$approved" = "true" ]; then
-      echo "✅ !$iid · ${author:-?} | href=$url color=gray"
+      echo "✅ !$iid · ${author:-?} | color=gray"
       status="Déjà approuvée par toi"
     elif [ -n "$firstSeen" ] && [ "$((now - firstSeen))" -ge "$NAG_SECS" ]; then
-      echo "🔴 !$iid · ${author:-?} | href=$url color=red"
+      echo "🔴 !$iid · ${author:-?} | color=red"
       status="⏰ En attente de ton approbation depuis ${wait_txt}"
     else
-      echo "🟡 !$iid · ${author:-?} | href=$url"
+      echo "🟡 !$iid · ${author:-?}"
       status="À approuver${wait_txt:+ (depuis $wait_txt)}"
     fi
 
-    echo "-- ${title:-(sans titre)} | href=$url"
+    echo "-- ${title:-(sans titre)} | color=gray"
     echo "-- $status | color=gray"
     echo "-- 🌐 Ouvrir la MR | href=$url"
     if [ -n "$report" ]; then
