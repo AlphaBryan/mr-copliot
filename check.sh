@@ -23,6 +23,8 @@ PROJECT=$(jq -r '.project' "$CONFIG")
 ENC=$(printf '%s' "$PROJECT" | sed 's#/#%2F#g')
 WS=$(jq -r '.work_start_hour' "$CONFIG")
 WE=$(jq -r '.work_end_hour' "$CONFIG")
+NAG_HOURS=$(jq -r '.approval_nag_hours // 2' "$CONFIG")
+NAG_SECS=$((NAG_HOURS * 3600))
 
 USERS=()
 while IFS= read -r u; do [ -n "$u" ] && USERS+=("$u"); done < <(jq -r '.watch_users[]' "$CONFIG")
@@ -53,6 +55,16 @@ case "$WDAYS" in *" $DOW "*) [ "$HOUR" -ge "$WS" ] && [ "$HOUR" -lt "$WE" ] && I
 # --- lecture de l'état précédent (le fichier n'est réécrit qu'à la fin) ---
 get_sha() { [ -f "$STATE" ] && awk -F'\t' -v k="$1" '$1==k{print $2}' "$STATE" || true; }
 
+# Valeur d'un champ dans l'ancien snapshot open.json (reporte firstSeen / notified2h / approved).
+# NB: on n'utilise pas `// empty` car `false // empty` renverrait empty pour un booléen false.
+prev_field() {
+  [ -f "$DIR/open.json" ] || return 0
+  jq -r --arg iid "$1" --arg f "$2" \
+    'first(.[] | select(.iid==$iid)) | .[$f] | select(. != null)' \
+    "$DIR/open.json" 2>/dev/null
+}
+
+NOW=$(date +%s)
 NEWSTATE=$(mktemp)   # journal anti-doublon reconstruit (uniquement les MR encore ouvertes)
 OPENTMP=$(mktemp)    # snapshot des MR ouvertes, pour le widget
 FETCH_FAILED=0       # passe à 1 si un appel glab échoue (auth/DNS/réseau)
@@ -81,9 +93,36 @@ for u in "${USERS[@]}"; do
 
     [ "$draft" = "true" ] && continue
 
-    # snapshot widget : toute MR ouverte non-draft (qu'elle soit reviewée ou non)
+    # --- mon statut d'approbation + suivi du délai sans mon approbation ---
+    appr=$(glab api "projects/$ENC/merge_requests/$iid/approvals" 2>>"$LOG")
+    if printf '%s' "$appr" | jq -e 'has("user_has_approved")' >/dev/null 2>&1; then
+      approved=$(printf '%s' "$appr" | jq -r '.user_has_approved')
+    else
+      # appel approvals KO : on réutilise la dernière valeur connue plutôt que d'inventer.
+      approved=$(prev_field "$iid" approved); [ -z "$approved" ] && approved=false
+      log "WARN approvals indisponible !$iid — réutilise approved=$approved"
+    fi
+
+    if [ "$approved" = "true" ]; then
+      first_seen=""; notified2h=false
+    else
+      first_seen=$(prev_field "$iid" firstSeen); [ -z "$first_seen" ] && first_seen=$NOW
+      notified2h=$(prev_field "$iid" notified2h); [ "$notified2h" = "true" ] || notified2h=false
+      age=$((NOW - first_seen))
+      if [ "$SEED" -ne 1 ] && [ "$INHOURS" -eq 1 ] && [ "$age" -ge "$NAG_SECS" ] && [ "$notified2h" != "true" ]; then
+        h=$((age / 3600)); m=$(((age % 3600) / 60))
+        terminal-notifier -title "À approuver ($author)" -subtitle "!$iid en attente >${NAG_HOURS}h" -message "$title" -open "$url" -group "mrwatch-nag-$iid" 2>>"$LOG"
+        ntfy_send "À approuver: $author" "!$iid $title (en attente ${h}h${m}m)" "$url" "hourglass"
+        notified2h=true
+        log "NAG !$iid $author age=${age}s"
+      fi
+    fi
+
+    # snapshot widget : toute MR ouverte non-draft, avec mon statut d'approbation
     jq -nc --arg iid "$iid" --arg author "$author" --arg title "$title" --arg url "$url" \
-      '{iid:$iid, author:$author, title:$title, url:$url}' >> "$OPENTMP"
+      --argjson approved "$approved" --arg firstSeen "$first_seen" --argjson notified2h "$notified2h" \
+      '{iid:$iid, author:$author, title:$title, url:$url, approved:$approved,
+        firstSeen:(if $firstSeen=="" then null else ($firstSeen|tonumber) end), notified2h:$notified2h}' >> "$OPENTMP"
 
     prev=$(get_sha "$iid")
 

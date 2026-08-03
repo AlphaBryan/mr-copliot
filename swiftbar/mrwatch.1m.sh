@@ -22,14 +22,31 @@ if launchctl print "gui/$UID_/$LABEL" >/dev/null 2>&1; then loaded=1; else loade
 HOUR=$((10#$(date +%H))); DOW=$(date +%u); inhours=0
 [ "$DOW" -ge 1 ] && [ "$DOW" -le 5 ] && [ "$HOUR" -ge "$WS" ] && [ "$HOUR" -lt "$WE" ] && inhours=1
 
-# Nombre de MR ouvertes (snapshot écrit par check.sh)
-count=0; [ -f "$OPENJSON" ] && count=$(jq 'length' "$OPENJSON" 2>/dev/null); [ -z "$count" ] && count=0
+# Seuil de nag (>Nh sans mon approbation), configurable
+NAG_HOURS=$(jq -r '.approval_nag_hours // 2' "$CONFIG" 2>/dev/null); NAG_HOURS=${NAG_HOURS:-2}
+NAG_SECS=$((NAG_HOURS * 3600))
+now=$(date +%s)
+
+# Compteurs depuis le snapshot écrit par check.sh
+#   total      = MR ouvertes non-draft
+#   unapproved = celles que JE n'ai pas encore approuvées (approved != true)
+#   overdue    = unapproved dont le délai d'attente dépasse le seuil
+total=0; unapproved=0; overdue=0
+if [ -f "$OPENJSON" ]; then
+  total=$(jq 'length' "$OPENJSON" 2>/dev/null); [ -z "$total" ] && total=0
+  unapproved=$(jq '[.[] | select(.approved != true)] | length' "$OPENJSON" 2>/dev/null); [ -z "$unapproved" ] && unapproved=0
+  overdue=$(jq --argjson now "$now" --argjson t "$NAG_SECS" \
+    '[.[] | select(.approved != true and .firstSeen != null and ($now - .firstSeen) >= $t)] | length' \
+    "$OPENJSON" 2>/dev/null); [ -z "$overdue" ] && overdue=0
+fi
 
 # --- Titre dans la barre de menu ---
 if [ "$loaded" -ne 1 ]; then
   echo "🔍⏹"
+elif [ "$overdue" -gt 0 ]; then
+  echo "🔴 $unapproved"                       # pastille rouge : au moins une MR >${NAG_HOURS}h sans mon aval
 elif [ "$inhours" -eq 1 ]; then
-  echo "🔍 $count"
+  if [ "$unapproved" -gt 0 ]; then echo "🔍 $unapproved"; else echo "🔍✓"; fi
 else
   echo "🔍💤"
 fi
@@ -40,22 +57,47 @@ if [ "$loaded" -eq 1 ]; then echo "Bot chargé | color=green"; else echo "Bot ar
 if [ "$inhours" -eq 1 ]; then echo "Heures actives (${WS}h-${WE}h) | color=green"; else echo "Hors heures (${WS}h-${WE}h, lun-ven) | color=gray"; fi
 lastts=$(tail -n 1 "$DIR/logs/check.log" 2>/dev/null | cut -c1-19)
 [ -n "$lastts" ] && echo "Dernier passage: $lastts | size=11 color=gray"
+if [ "$total" -gt 0 ]; then
+  echo "$unapproved à approuver · $overdue en retard (>${NAG_HOURS}h) | size=11 color=gray"
+fi
 echo "---"
 
 # --- MR ouvertes (depuis open.json) ---
-if [ "${count:-0}" -eq 0 ]; then
+if [ "${total:-0}" -eq 0 ]; then
   echo "Aucune MR ouverte"
 else
   j=0
-  while [ "$j" -lt "$count" ]; do
+  while [ "$j" -lt "$total" ]; do
     iid=$(jq -r ".[$j].iid" "$OPENJSON" 2>/dev/null)
     author=$(jq -r ".[$j].author" "$OPENJSON" 2>/dev/null | tr -d '|')
     title=$(jq -r ".[$j].title" "$OPENJSON" 2>/dev/null | tr -d '|')
     url=$(jq -r ".[$j].url" "$OPENJSON" 2>/dev/null)
+    approved=$(jq -r ".[$j].approved // false" "$OPENJSON" 2>/dev/null)
+    firstSeen=$(jq -r ".[$j].firstSeen // empty" "$OPENJSON" 2>/dev/null)
     j=$((j + 1))
     report=$(ls -t "$RDIR"/*-mr"$iid"-*.md 2>/dev/null | head -1)
-    echo "!$iid · ${author:-?} | href=$url"
+
+    # délai d'attente lisible (pour les MR non approuvées)
+    wait_txt=""
+    if [ -n "$firstSeen" ]; then
+      age=$((now - firstSeen)); [ "$age" -lt 0 ] && age=0
+      h=$((age / 3600)); m=$(((age % 3600) / 60))
+      if [ "$h" -gt 0 ]; then wait_txt="${h}h${m}m"; else wait_txt="${m}m"; fi
+    fi
+
+    if [ "$approved" = "true" ]; then
+      echo "✅ !$iid · ${author:-?} | href=$url color=gray"
+      status="Déjà approuvée par toi"
+    elif [ -n "$firstSeen" ] && [ "$((now - firstSeen))" -ge "$NAG_SECS" ]; then
+      echo "🔴 !$iid · ${author:-?} | href=$url color=red"
+      status="⏰ En attente de ton approbation depuis ${wait_txt}"
+    else
+      echo "🟡 !$iid · ${author:-?} | href=$url"
+      status="À approuver${wait_txt:+ (depuis $wait_txt)}"
+    fi
+
     echo "-- ${title:-(sans titre)} | href=$url"
+    echo "-- $status | color=gray"
     echo "-- 🌐 Ouvrir la MR | href=$url"
     if [ -n "$report" ]; then
       echo "-- 📄 Ouvrir le rapport | bash=/usr/bin/open param1=-a param2=\"$APP\" param3=$report terminal=false"

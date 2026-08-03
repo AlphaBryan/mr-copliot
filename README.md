@@ -16,8 +16,22 @@ Toutes les 15 min, **uniquement 8h-17h du lundi au vendredi** (auto-désactivé 
    - Bugs / incohérences C# ou TS, classés par gravité.
    - **Commentaires prêts à coller** sur la MR (groupés Bugs / Améliorations / Questions, chacun avec `fichier:ligne`).
 4. **Notification cliquable** quand le rapport est prêt → ouvre le `.md` dans VS Code.
+5. **Suit mon statut d'approbation** sur chaque MR et me **relance** si j'en laisse une trop longtemps.
 
 Les bots (Renovate, Snyk) sont ignorés automatiquement (pas dans la watchlist).
+
+### Suivi de mes approbations (pastille rouge + relance)
+
+Pour chaque MR ouverte, `check.sh` interroge l'API GitLab (`.../approvals`) pour savoir si **moi**
+je l'ai déjà approuvée (`user_has_approved`) et l'inscrit dans `open.json` (`approved`, `firstSeen`).
+
+- **Relance ntfy + macOS** : si une MR reste **plus de `approval_nag_hours` heures (défaut 2)** sans
+  mon approbation, j'en suis notifié **une seule fois** (dédup via `notified2h`, uniquement en heures
+  actives). Le compteur part du 1er passage où la MR m'est montrée sans mon aval.
+- **Barre de menu** : `🔴 N` (pastille rouge) dès qu'une MR dépasse le seuil sans mon aval ; sinon
+  `🔍 N` = nombre de MR **restant à approuver** ; `🔍✓` quand j'ai tout approuvé (plus de chiffre).
+- **Menu déroulant** : `✅` grisé = déjà approuvée ; `🟡` = à approuver (< seuil, avec délai) ;
+  `🔴` rouge = en attente au-delà du seuil (avec le temps écoulé).
 
 ### Auto-apprentissage du style des reviewers
 
@@ -53,7 +67,7 @@ d'ouvrir la MR. Notif au lancement, puis notif cliquable quand le rapport est pr
 
 | Fichier | Rôle |
 |---|---|
-| `config.json` | Watchlist, heures, modèle, plafond diff, `repo_dir`, `local_repo_dir`, `learn_from_reviewers`, `learn_window_days`, `learn_model`. **À éditer ici.** |
+| `config.json` | Watchlist, heures, `approval_nag_hours` (seuil relance, défaut 2), modèle, plafond diff, `repo_dir`, `local_repo_dir`, `learn_from_reviewers`, `learn_window_days`, `learn_model`. **À éditer ici.** |
 | `check.sh` | Détection + notif + déclenche les reviews. |
 | `review.sh <iid>` | Génère un rapport pour une MR (mode repo via worktree, repli diff). |
 | `review-local.sh [repo]` | Review la branche locale courante (commité + non commité). |
