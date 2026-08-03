@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+
+# Runtime logs
+logs/
+
+# Generated review output (contains proprietary MR content — do NOT publish)
+reviews/
+
+# Git worktrees / checkouts of the watched private repo
+worktrees/
+
+# Generated "learned style" guide (embeds internal codebase details)
+prompts/learned-style.md
+
+# Runtime state
+state.tsv
+learn-state.tsv
+open.json
+
+# Machine-specific config (absolute paths, watched usernames, ntfy token).
+# Copy config.example.json -> config.json and fill in locally.
+config.json

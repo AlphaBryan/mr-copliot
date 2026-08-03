@@ -1,0 +1,31 @@
+{
+  "project": "group/subgroup/YourRepo",
+  "watch_users": [
+    "gitlab.username.1",
+    "gitlab.username.2"
+  ],
+  "work_start_hour": 8,
+  "work_end_hour": 17,
+  "work_days": [1, 2, 3, 4, 5],
+  "review_model": "sonnet",
+  "max_diff_lines": 2500,
+  "learn_from_reviewers": [
+    "reviewer.username.1",
+    "reviewer.username.2"
+  ],
+  "learn_window_days": 30,
+  "learn_model": "sonnet",
+  "repo_dir": "/absolute/path/to/review-clone",
+  "worktrees_dir": "/absolute/path/to/mr-watch/worktrees",
+  "local_repo_dir": "/absolute/path/to/main-repo",
+  "local_base_branch": "main",
+  "reviews_dir": "/absolute/path/to/mr-watch/reviews",
+  "open_report_app": "Visual Studio Code",
+  "jira_extract": "/absolute/path/to/jira-extract.sh",
+  "ntfy": {
+    "enabled": true,
+    "server": "https://ntfy.sh",
+    "topic": "your-ntfy-topic",
+    "token": ""
+  }
+}

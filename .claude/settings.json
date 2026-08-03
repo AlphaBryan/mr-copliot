@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(glab mr list:*)",
+      "Bash(glab mr diff:*)",
+      "Bash(glab api:*)",
+      "Bash(jq:*)",
+      "Bash(bash status.sh)",
+      "Bash(bash check.sh:*)",
+      "Bash(bash review.sh:*)",
+      "Bash(bash install.sh)",
+      "Bash(bash uninstall.sh)",
+      "Bash(launchctl print:*)",
+      "Bash(launchctl list:*)",
+      "Bash(cat:*)",
+      "Bash(tail:*)",
+      "Bash(ls:*)",
+      "Bash(curl:*ntfy.sh*)"
+    ]
+  }
+}
