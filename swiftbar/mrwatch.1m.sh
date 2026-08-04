@@ -123,4 +123,22 @@ else
 fi
 
 echo "📁 Ouvrir le dossier des rapports | bash=/usr/bin/open param1=$RDIR terminal=false"
+
+# --- Logs (sous-menu) ---
+LOGDIR="$DIR/logs"
+echo "📜 Voir les logs"
+echo "-- 📁 Dossier des logs | bash=/usr/bin/open param1=$LOGDIR terminal=false"
+[ -f "$LOGDIR/check.log" ] && echo "-- 📄 check.log (surveillance) | bash=/usr/bin/open param1=-a param2=\"$APP\" param3=$LOGDIR/check.log terminal=false"
+[ -f "$LOGDIR/learn.log" ] && echo "-- 🧠 learn.log (apprentissage) | bash=/usr/bin/open param1=-a param2=\"$APP\" param3=$LOGDIR/learn.log terminal=false"
+latest_post=$(ls -t "$LOGDIR"/post-*.log 2>/dev/null | head -1)
+[ -n "$latest_post" ] && echo "-- 📮 $(basename "$latest_post") (dernier post) | bash=/usr/bin/open param1=-a param2=\"$APP\" param3=$latest_post terminal=false"
+# Aperçu rapide des 5 dernières lignes de check.log (lecture seule, dans le menu)
+if [ -f "$LOGDIR/check.log" ]; then
+  echo "-----"
+  echo "-- Dernières lignes (check.log) | size=11 color=gray"
+  tail -n 5 "$LOGDIR/check.log" 2>/dev/null | while IFS= read -r l; do
+    echo "-- ${l//|/¦} | font=Menlo size=10 color=gray"
+  done
+fi
+
 echo "↻ Rafraîchir l'affichage | refresh=true"
