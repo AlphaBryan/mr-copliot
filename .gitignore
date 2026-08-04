@@ -7,6 +7,10 @@ logs/
 # Generated review output (contains proprietary MR content — do NOT publish)
 reviews/
 
+# Auto-évaluation output (embeds human reviewer comments — proprietary)
+grades/
+graded-state.tsv
+
 # Git worktrees / checkouts of the watched private repo
 worktrees/
 

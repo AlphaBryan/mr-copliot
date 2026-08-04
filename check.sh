@@ -38,6 +38,9 @@ HALERT_AFTER=$(jq -r '.health_alert_after // 3' "$CONFIG")
 SKIP_TRIVIAL=$(jq -r '.skip_trivial_reviews // true' "$CONFIG")
 TRIVIAL_MAX_FILES=$(jq -r '.trivial_max_files // 3' "$CONFIG")
 TRIVIAL_PATTERNS_JSON=$(jq -c '.trivial_file_patterns // ["Directory.Packages.props","*.csproj","*.props","package.json","package-lock.json","yarn.lock","pnpm-lock.yaml"]' "$CONFIG")
+# Auto-évaluation : après merge d'une MR reviewée, comparer ma review aux commentaires humains.
+AUTO_GRADE=$(jq -r '.auto_grade_reviews // false' "$CONFIG")
+GRADED_STATE="$DIR/graded-state.tsv"; [ "$AUTO_GRADE" = "true" ] && touch "$GRADED_STATE" 2>/dev/null
 
 # Renvoie "true" si la MR ne modifie QUE des fichiers de dépendances (≤ TRIVIAL_MAX_FILES).
 # Échec API / doute -> "false" (on fait la review : on ne skippe jamais à tort).
@@ -97,6 +100,8 @@ prev_field() {
 }
 
 NOW=$(date +%s)
+# iids ouverts au passage précédent (pour détecter les MR mergées -> auto-évaluation)
+OLD_IIDS=$(jq -r '.[].iid' "$DIR/open.json" 2>/dev/null | sort -u)
 NEWSTATE=$(mktemp)   # journal anti-doublon reconstruit (uniquement les MR encore ouvertes)
 OPENTMP=$(mktemp)    # snapshot des MR ouvertes, pour le widget
 FETCH_FAILED=0       # passe à 1 si un appel glab échoue (auth/DNS/réseau)
@@ -253,6 +258,29 @@ if [ "$FETCH_FAILED" -eq 0 ]; then
   jq -s '.' "$OPENTMP" > "$DIR/open.json" 2>/dev/null || printf '[]\n' > "$DIR/open.json"
 fi
 rm -f "$OPENTMP"
+
+# --- Auto-évaluation des MR mergées que j'avais reviewées ---
+# Une MR présente au passage précédent et absente maintenant a été mergée/fermée. Si j'ai un
+# rapport pour elle et qu'elle est mergée, on note la review (comparaison aux commentaires humains).
+if [ "$AUTO_GRADE" = "true" ] && [ "$SEED" -ne 1 ] && [ "$FETCH_FAILED" -eq 0 ] && [ -n "$OLD_IIDS" ]; then
+  CUR_IIDS=$(jq -r '.[].iid' "$DIR/open.json" 2>/dev/null)
+  for oid in $OLD_IIDS; do
+    printf '%s\n' "$CUR_IIDS" | grep -qxF "$oid" && continue      # encore ouverte
+    grep -qxF "$oid" "$GRADED_STATE" 2>/dev/null && continue      # déjà noté
+    if ! ls "$REVIEWS_DIR"/*-mr"$oid"-*.md >/dev/null 2>&1; then
+      echo "$oid" >> "$GRADED_STATE"; continue                    # pas de rapport -> rien à noter
+    fi
+    st=$(glab api "projects/$ENC/merge_requests/$oid" 2>>"$LOG" | jq -r '.state // ""')
+    if [ "$st" = "merged" ]; then
+      timeout 300 /bin/bash "$DIR/grade-review.sh" "$oid" >> "$DIR/logs/grade-$oid.log" 2>&1
+      echo "$oid" >> "$GRADED_STATE"
+      log "GRADED !$oid (mergé)"
+    elif [ -n "$st" ]; then
+      echo "$oid" >> "$GRADED_STATE"                              # fermée non-mergée : ne pas re-checker
+      log "grade !$oid ignoré (state=$st)"
+    fi
+  done
+fi
 
 # --- Santé : suivi des échecs GitLab + alerte ntfy si le bot est aveugle trop longtemps ---
 # health.json est réécrit à CHAQUE passage → sa présence/fraîcheur sert aussi de heartbeat au widget.

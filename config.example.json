@@ -14,6 +14,7 @@
   "trivial_file_patterns": ["Directory.Packages.props", "*.csproj", "*.props", "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml"],
   "auto_post_review": false,
   "post_delay_minutes": 15,
+  "auto_grade_reviews": false,
   "review_model": "sonnet",
   "max_diff_lines": 2500,
   "learn_from_reviewers": [
