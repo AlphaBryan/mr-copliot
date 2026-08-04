@@ -16,6 +16,20 @@
   ],
   "learn_window_days": 30,
   "learn_model": "sonnet",
+  "learn_ai_filter": true,
+  "learn_ai_filter_model": "sonnet",
+  "learn_exclude_authors": [
+    "gitlab-duo",
+    "github-copilot"
+  ],
+  "learn_ai_markers": [
+    "🤖",
+    "generated with claude",
+    "co-authored-by: claude",
+    "as an ai",
+    "language model",
+    "gitlab duo"
+  ],
   "repo_dir": "/absolute/path/to/review-clone",
   "worktrees_dir": "/absolute/path/to/mr-watch/worktrees",
   "local_repo_dir": "/absolute/path/to/main-repo",

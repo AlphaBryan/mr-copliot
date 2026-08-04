@@ -46,6 +46,23 @@ rapports commentent de plus en plus comme un vrai dev de l'équipe. L'apprentiss
 (seuls les nouveaux commentaires sont distillés, dédup par ID dans `learn-state.tsv`) et **idempotent**
 (rien de neuf → aucun appel claude). Les noms des personnes sont anonymisés dans le guide.
 
+#### Anti « IA qui entraîne l'IA »
+
+Maintenant que des reviewers collent parfois des commentaires générés par IA, `learn.sh` filtre le
+corpus avant distillation pour ne pas apprendre d'une autre IA — en **deux couches** :
+
+1. **Déterministe (gratuit)** : écarte les commentaires des comptes listés dans
+   `learn_exclude_authors` (bots, comptes IA dédiés) et ceux contenant une **signature**
+   `learn_ai_markers` (sous-chaînes insensibles à la casse, ex. `🤖`, `co-authored-by: claude`).
+2. **Garde LLM** (`learn_ai_filter`, activé par défaut) : `claude` classe chaque **nouveau**
+   commentaire humain-vs-IA (modèle `learn_ai_filter_model`). Les commentaires jugés IA sont retirés
+   du lot mais **marqués traités** (jamais re-classés). Dans le doute, le classifieur tranche
+   **humain** (on préfère garder un vrai commentaire que le jeter). Si sa sortie est illisible, le
+   passage est **sauté** (rien appris, réessai au prochain tour) — le guide n'est jamais contaminé.
+
+Prompt du classifieur : `prompts/ai-filter-prompt.md`. Mettre `learn_ai_filter` à `false` désactive
+la couche 2 (la couche 1 reste active).
+
 ### Mode repo (par défaut) vs mode diff
 
 Par défaut, `review.sh` ne se contente PAS du diff : il crée un **worktree git isolé** sur la
@@ -67,7 +84,7 @@ d'ouvrir la MR. Notif au lancement, puis notif cliquable quand le rapport est pr
 
 | Fichier | Rôle |
 |---|---|
-| `config.json` | Watchlist, heures, `approval_nag_hours` (seuil relance, défaut 2), modèle, plafond diff, `repo_dir`, `local_repo_dir`, `learn_from_reviewers`, `learn_window_days`, `learn_model`. **À éditer ici.** |
+| `config.json` | Watchlist, heures, `approval_nag_hours` (seuil relance, défaut 2), modèle, plafond diff, `repo_dir`, `local_repo_dir`, `learn_from_reviewers`, `learn_window_days`, `learn_model`, filtre IA (`learn_ai_filter`, `learn_exclude_authors`, `learn_ai_markers`). **À éditer ici.** |
 | `check.sh` | Détection + notif + déclenche les reviews. |
 | `review.sh <iid>` | Génère un rapport pour une MR (mode repo via worktree, repli diff). |
 | `review-local.sh [repo]` | Review la branche locale courante (commité + non commité). |
@@ -75,6 +92,7 @@ d'ouvrir la MR. Notif au lancement, puis notif cliquable quand le rapport est pr
 | `learn.sh` | Apprend le style des reviewers seniors → met à jour `prompts/learned-style.md`. 2x/jour (8h05, 13h05). |
 | `prompts/review-prompt.md` | Le prompt de review (modifiable pour ajouter des critères). |
 | `prompts/learn-prompt.md` | Le prompt de distillation utilisé par `learn.sh`. |
+| `prompts/ai-filter-prompt.md` | Le prompt du classifieur humain-vs-IA (couche 2 de l'anti « IA entraîne l'IA »). |
 | `prompts/learned-style.md` | Le guide de style APPRIS (généré/maj auto, injecté dans chaque review). |
 | `learn-state.tsv` | IDs des commentaires déjà appris (dédup). Supprimer = tout ré-apprendre. |
 | `reviews/` | Rapports générés (`ADF-XXXX-mrIID-date.md`, `LOCAL-<branche>-date.md`). |

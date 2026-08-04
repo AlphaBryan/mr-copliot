@@ -23,6 +23,14 @@ ENC=$(printf '%s' "$PROJECT" | sed 's#/#%2F#g')
 MODEL=$(jq -r '.learn_model // .review_model // "sonnet"' "$CONFIG")
 WINDOW=$(jq -r '.learn_window_days // 30' "$CONFIG")
 REVIEWERS_JSON=$(jq -c '.learn_from_reviewers // []' "$CONFIG")
+# Anti « IA qui entraîne l'IA » :
+#  Couche 1 (déterministe) : comptes à exclure + sous-chaînes-signatures d'IA.
+#  Couche 2 (garde LLM)     : classifieur humain-vs-IA sur les nouveaux commentaires.
+EXCLUDE_JSON=$(jq -c '.learn_exclude_authors // []' "$CONFIG")
+MARKERS_JSON=$(jq -c '.learn_ai_markers // []' "$CONFIG")
+AI_FILTER=$(jq -r '.learn_ai_filter // true' "$CONFIG")
+AI_MODEL=$(jq -r '.learn_ai_filter_model // .learn_model // "sonnet"' "$CONFIG")
+AI_PROMPT="$DIR/prompts/ai-filter-prompt.md"
 NTFY_ENABLED=$(jq -r '.ntfy.enabled // false' "$CONFIG")
 NTFY_URL="$(jq -r '.ntfy.server // ""' "$CONFIG")/$(jq -r '.ntfy.topic // ""' "$CONFIG")"
 NTFY_TOKEN=$(jq -r '.ntfy.token // ""' "$CONFIG")
@@ -67,12 +75,18 @@ corpus=$(mktemp)   # 1 objet JSON par ligne
 while IFS="$(printf '\t')" read -r iid mr_author; do
   [ -z "$iid" ] && continue
   glab api "projects/$ENC/merge_requests/$iid/discussions?per_page=100" 2>>"$LOG" \
-    | jq -c --argjson rev "$REVIEWERS_JSON" --arg ma "$mr_author" --arg iid "$iid" '
+    | jq -c --argjson rev "$REVIEWERS_JSON" --arg ma "$mr_author" --arg iid "$iid" \
+           --argjson excl "$EXCLUDE_JSON" --argjson markers "$MARKERS_JSON" '
         .[]? | .notes[]?
         | select(.system == false)
         | select(.body != null and (.body | gsub("\\s";"") | length) > 3)
         | select(.author.username as $a | ($rev | index($a)) != null)
         | select(.author.username != $ma)
+        # Couche 1a — écarte les comptes explicitement exclus (bots, comptes IA dédiés)
+        | select(.author.username as $a | ($excl | index($a)) == null)
+        # Couche 1b — écarte tout commentaire portant un marqueur IA (sous-chaine, insensible casse)
+        | select( (.body | ascii_downcase) as $b
+                  | any($markers[]; . as $m | ($b | contains($m | ascii_downcase))) | not )
         | { id: (.id|tostring), iid: $iid, author: .author.username,
             resolved: (.resolved // false),
             file: (.position.new_path // .position.old_path // null),
@@ -103,6 +117,64 @@ if [ "${new_count:-0}" -eq 0 ]; then
   log "Rien de neuf à apprendre — guide inchangé. DONE."
   rm -f "$fresh"
   exit 0
+fi
+
+# --- 3b. Couche 2 : garde LLM anti « IA qui entraîne l'IA » ---
+# claude classe chaque nouveau commentaire humain-vs-IA. On retire les IA du lot avant
+# distillation. Dans le doute, le prompt tranche « humain » (on préfère garder un vrai
+# commentaire que jeter à tort). Les IA écartées sont marquées traitées (pas de re-classement).
+# Échec/illisible => on SAUTE ce tour (rien appris, rien marqué) et on réessaiera : on ne
+# contamine jamais le guide avec un lot non filtré.
+AI_LINES=""   # fichier des lignes IA à marquer traitées (renseigné si le filtre s'active)
+if [ "$AI_FILTER" = "true" ]; then
+  if [ ! -f "$AI_PROMPT" ]; then
+    log "WARN filtre IA activé mais prompt absent ($AI_PROMPT) — couche 2 sautée."
+  else
+    classify_in=$(mktemp)
+    n=0
+    while IFS= read -r cline; do
+      [ -z "$cline" ] && continue
+      n=$((n + 1))
+      body=$(printf '%s' "$cline" | jq -r '.body')
+      printf '### Commentaire [%s]\n%s\n\n' "$n" "$body" >> "$classify_in"
+    done < "$fresh"
+
+    cin=$(mktemp)
+    { cat "$AI_PROMPT"; echo; echo "=== COMMENTAIRES À CLASSER ($n) ==="; cat "$classify_in"; } > "$cin"
+    log "Filtre IA: classification de $n commentaires (model=$AI_MODEL)…"
+    verdict=$(claude -p --model "$AI_MODEL" \
+      --disallowedTools "Write" "Edit" "MultiEdit" "NotebookEdit" "Bash" \
+      < "$cin" 2>>"$LOG")
+    rm -f "$cin" "$classify_in"
+
+    # Réponse attendue : un tableau JSON des indices IA, ex [2,5] (ou [] si aucun).
+    # Extraction tolérante : on isole le 1er bloc [chiffres/virgules/espaces].
+    arr=$(printf '%s' "$verdict" | tr -d '\r' | sed -n 's/.*\(\[[0-9, ]*\]\).*/\1/p' | head -1)
+    if [ -z "$arr" ] || ! printf '%s' "$arr" | jq -e 'type=="array"' >/dev/null 2>&1; then
+      log "ERROR filtre IA: sortie non exploitable — lot NON appris, réessai au prochain passage."
+      ntfy_send "Filtre IA KO" "Classifieur illisible — apprentissage sauté ce tour." "warning"
+      rm -f "$fresh"
+      exit 1
+    fi
+    ai_list=$(printf '%s' "$arr" | jq -r '.[] | select(type=="number")' | tr '\n' ' ')
+
+    ai_lines=$(mktemp); fresh_h=$(mktemp)
+    awk -v ai="$ai_list" 'BEGIN{split(ai,a," ");for(i in a)S[a[i]]=1} NF{k++; if(S[k])print}'  "$fresh" > "$ai_lines"
+    awk -v ai="$ai_list" 'BEGIN{split(ai,a," ");for(i in a)S[a[i]]=1} NF{k++; if(!S[k])print}' "$fresh" > "$fresh_h"
+    ai_n=$(grep -c . "$ai_lines" || true)
+    mv "$fresh_h" "$fresh"
+    AI_LINES="$ai_lines"
+    log "Filtre IA: $ai_n commentaire(s) IA écarté(s) sur $n."
+
+    human_n=$(grep -c . "$fresh" || true)
+    if [ "${human_n:-0}" -eq 0 ]; then
+      log "Filtre IA: les $n nouveaux commentaires sont tous IA — rien d'humain à apprendre. DONE."
+      [ "${ai_n:-0}" -gt 0 ] && jq -r '.id' "$AI_LINES" >> "$STATE"
+      rm -f "$fresh" "$AI_LINES"
+      exit 0
+    fi
+    new_count="$human_n"
+  fi
 fi
 
 # --- 4. Mettre en forme le lot pour le prompt ---
@@ -137,7 +209,7 @@ rm -f "$tmp" "$batch"
 # --- 6. Écrire le guide seulement si la sortie est plausible (ne JAMAIS écraser par du vide) ---
 if [ -z "$new_guide" ] || [ "$(printf '%s' "$new_guide" | wc -c | tr -d ' ')" -lt 80 ]; then
   log "ERROR: sortie claude vide/trop courte — guide CONSERVÉ, état NON marqué (on réessaiera)."
-  rm -f "$fresh"
+  rm -f "$fresh" ${AI_LINES:+"$AI_LINES"}
   ntfy_send "Apprentissage KO" "Distillation vide — guide inchangé. Voir learn.log" "warning"
   exit 1
 fi
@@ -146,8 +218,11 @@ printf '%s\n' "$new_guide" > "$GUIDE"
 log "Guide mis à jour: $GUIDE"
 
 # --- 7. Marquer ces note_id comme appris (après succès seulement) ---
+# On marque les commentaires humains distillés ET les IA écartées par la couche 2,
+# pour ne jamais les re-traiter/re-classer.
 jq -r '.id' "$fresh" >> "$STATE"
-rm -f "$fresh"
+[ -n "${AI_LINES:-}" ] && [ -f "$AI_LINES" ] && jq -r '.id' "$AI_LINES" >> "$STATE"
+rm -f "$fresh" ${AI_LINES:+"$AI_LINES"}
 
 learned_total=$(grep -c . "$STATE" || true)
 log "DONE — +$new_count commentaires appris (total cumulé: $learned_total)."
