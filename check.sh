@@ -38,22 +38,38 @@ REVIEWS_DIR=$(jq -r '.reviews_dir // ""' "$CONFIG"); [ -z "$REVIEWS_DIR" ] && RE
 # Santé : alerte après N passages consécutifs où les appels GitLab échouent (dead-man's switch).
 HEALTH="$DIR/health.json"
 HALERT_AFTER=$(jq -r '.health_alert_after // 3' "$CONFIG")
-# Skip des MR triviales : diff ne touchant QUE des manifestes de dépendances (bumps).
+# Skip des MR triviales : bump de dépendances OU petit changement (peu de fichiers/lignes).
+# Dans ces cas : pas de review claude ni d'auto-post, juste une relance « à reviewer toi-même ».
 SKIP_TRIVIAL=$(jq -r '.skip_trivial_reviews // true' "$CONFIG")
 TRIVIAL_MAX_FILES=$(jq -r '.trivial_max_files // 3' "$CONFIG")
 TRIVIAL_PATTERNS_JSON=$(jq -c '.trivial_file_patterns // ["Directory.Packages.props","*.csproj","*.props","package.json","package-lock.json","yarn.lock","pnpm-lock.yaml"]' "$CONFIG")
+TRIVIAL_SMALL_MAX_FILES=$(jq -r '.trivial_small_max_files // 2' "$CONFIG")   # petit changement : ≤ N fichiers
+TRIVIAL_SMALL_MAX_LINES=$(jq -r '.trivial_small_max_lines // 30' "$CONFIG")  # ET ≤ M lignes changées
+TRIVIAL_REMINDER_MIN=$(jq -r '.trivial_reminder_minutes // 15' "$CONFIG")    # relance « à reviewer » toutes les N min
+TRIVIAL_REMINDER_SECS=$((TRIVIAL_REMINDER_MIN * 60))
 # Auto-évaluation : après merge d'une MR reviewée, comparer ma review aux commentaires humains.
 AUTO_GRADE=$(jq -r '.auto_grade_reviews // false' "$CONFIG")
 GRADED_STATE="$DIR/graded-state.tsv"; [ "$AUTO_GRADE" = "true" ] && touch "$GRADED_STATE" 2>/dev/null
 
-# Renvoie "true" si la MR ne modifie QUE des fichiers de dépendances (≤ TRIVIAL_MAX_FILES).
+# Renvoie "true" si la MR est triviale : soit un PETIT changement (≤ N fichiers ET ≤ M lignes),
+# soit un bump de DÉPENDANCES (ne touche que des manifestes, ≤ TRIVIAL_MAX_FILES).
 # Échec API / doute -> "false" (on fait la review : on ne skippe jamais à tort).
 is_trivial_mr() {
-  local iid="$1" d n f base match
+  local iid="$1" d n lines f base match
   d=$(glab api "projects/$ENC/merge_requests/$iid/diffs?per_page=50" 2>>"$LOG")
   printf '%s' "$d" | jq -e 'type=="array"' >/dev/null 2>&1 || { echo false; return; }
   n=$(printf '%s' "$d" | jq 'length'); [ -z "$n" ] && n=0
-  { [ "$n" -eq 0 ] || [ "$n" -gt "$TRIVIAL_MAX_FILES" ]; } && { echo false; return; }
+  [ "$n" -eq 0 ] && { echo false; return; }
+
+  # 1) Petit changement : peu de fichiers ET peu de lignes ajoutées/retirées.
+  lines=$(printf '%s' "$d" | jq '[.[].diff // "" | split("\n")[] | select(test("^[+-]") and (test("^(\\+\\+\\+|---) ")|not))] | length')
+  [ -z "$lines" ] && lines=999999
+  if [ "$n" -le "$TRIVIAL_SMALL_MAX_FILES" ] && [ "$lines" -le "$TRIVIAL_SMALL_MAX_LINES" ]; then
+    echo true; return
+  fi
+
+  # 2) Bump de dépendances : ne touche QUE des manifestes, ≤ TRIVIAL_MAX_FILES.
+  [ "$n" -gt "$TRIVIAL_MAX_FILES" ] && { echo false; return; }
   while IFS= read -r f; do
     [ -z "$f" ] && continue
     base=$(basename "$f"); match=0
@@ -157,16 +173,21 @@ for u in "${USERS[@]}"; do
     last_approver=false
     [ "$approved" != "true" ] && [ "$approvals_left" = "1" ] && last_approver=true
 
+    # statut « trivial » reporté du passage précédent (fixé à la 1re détection ; sert au nag ci-dessous)
+    trivial=$(prev_field "$iid" trivial); [ "$trivial" = "true" ] || trivial=false
+
     if [ "$approved" = "true" ]; then
-      first_seen=""; notified2h=false; last_notif_at=0
+      first_seen=""; notified2h=false; last_notif_at=0; trivial_reminded_at=0
     else
       first_seen=$(prev_field "$iid" firstSeen); [ -z "$first_seen" ] && first_seen=$NOW
       notified2h=$(prev_field "$iid" notified2h); [ "$notified2h" = "true" ] || notified2h=false
       last_notif_at=$(prev_field "$iid" lastApproverNotifiedAt); [ -z "$last_notif_at" ] && last_notif_at=0
+      trivial_reminded_at=$(prev_field "$iid" trivialRemindedAt); [ -z "$trivial_reminded_at" ] && trivial_reminded_at=0
       age=$((NOW - first_seen))
+      # Priorité des relances : (1) tu es le dernier approbateur, (2) MR triviale à reviewer toi-même, (3) >seuil.
       if [ "$last_approver" = "true" ]; then
-        # « Tu es le dernier » : relance RÉPÉTÉE toutes les LAST_REPEAT_MIN min (immédiate la 1re fois),
-        # tant que la MR n'est pas approuvée.
+        trivial_reminded_at=0   # le signal « dernier » prime : on réarme la relance triviale
+        # « Tu es le dernier » : relance RÉPÉTÉE toutes les LAST_REPEAT_MIN min (immédiate la 1re fois).
         if [ "$SEED" -ne 1 ] && [ "$INHOURS" -eq 1 ] \
            && { [ "$last_notif_at" -eq 0 ] || [ "$((NOW - last_notif_at))" -ge "$LAST_REPEAT_SECS" ]; }; then
           terminal-notifier -title "🎯 Dernier à approuver ($author)" -subtitle "!$iid n'attend que TON aval" -message "$title" -open "$url" -group "mrwatch-last-$iid" 2>>"$LOG"
@@ -174,8 +195,19 @@ for u in "${USERS[@]}"; do
           last_notif_at=$NOW
           log "NAG-LAST !$iid $author (approvals_left=1, relance ${LAST_REPEAT_MIN}min)"
         fi
+      elif [ "$trivial" = "true" ]; then
+        last_notif_at=0
+        # MR triviale (bump/petit changement) NON reviewée par le bot : relance « à reviewer toi-même »
+        # toutes les TRIVIAL_REMINDER_MIN min tant que je ne l'ai pas approuvée.
+        if [ "$SEED" -ne 1 ] && [ "$INHOURS" -eq 1 ] \
+           && { [ "$trivial_reminded_at" -eq 0 ] || [ "$((NOW - trivial_reminded_at))" -ge "$TRIVIAL_REMINDER_SECS" ]; }; then
+          terminal-notifier -title "🔎 À reviewer toi-même ($author)" -subtitle "!$iid petit changement, pas de review auto" -message "$title" -open "$url" -group "mrwatch-triv-$iid" 2>>"$LOG"
+          ntfy_send "🔎 À reviewer: $author" "!$iid $title — petit changement, review manuelle" "$url" "eyes"
+          trivial_reminded_at=$NOW
+          log "NAG-TRIVIAL !$iid $author (relance ${TRIVIAL_REMINDER_MIN}min)"
+        fi
       else
-        last_notif_at=0   # plus (ou pas) dernier approbateur -> on réarme la relance immédiate
+        last_notif_at=0; trivial_reminded_at=0   # réarme les relances répétées
         # Relance temporelle classique après le seuil (une seule fois).
         if [ "$SEED" -ne 1 ] && [ "$INHOURS" -eq 1 ] && [ "$age" -ge "$NAG_SECS" ] && [ "$notified2h" != "true" ]; then
           h=$((age / 3600)); m=$(((age % 3600) / 60))
@@ -188,10 +220,9 @@ for u in "${USERS[@]}"; do
     fi
 
     prev=$(get_sha "$iid")
-    # État d'auto-post reporté du passage précédent (open.json).
+    # État d'auto-post reporté du passage précédent (open.json). (trivial + trivial_reminded_at déjà lus plus haut.)
     post_eligible=$(prev_field "$iid" postEligible); [ "$post_eligible" = "true" ] || post_eligible=false
     review_posted=$(prev_field "$iid" reviewPosted); [ "$review_posted" = "true" ] || review_posted=false
-    trivial=$(prev_field "$iid" trivial); [ "$trivial" = "true" ] || trivial=false
 
     if [ "$SEED" -eq 1 ]; then
       printf '%s\t%s\n' "$iid" "$sha" >> "$NEWSTATE"
@@ -199,16 +230,17 @@ for u in "${USERS[@]}"; do
       post_eligible=false   # baseline : les MR déjà ouvertes ne s'auto-postent jamais
     elif [ "$INHOURS" -eq 1 ] && [ "$prev" != "$sha" ]; then
       if [ -z "$prev" ]; then kind="Nouvelle MR"; post_eligible=true; else kind="MR mise a jour"; fi
-      # MR triviale (bump de dépendances) ? On teste seulement à la 1re détection.
+      # Triviale (bump OU petit changement) ? On teste seulement à la 1re détection.
       trivial=false
       [ "$SKIP_TRIVIAL" = "true" ] && [ -z "$prev" ] && trivial=$(is_trivial_mr "$iid")
-      sub="!$iid"; [ "$trivial" = "true" ] && sub="!$iid · bump (review sautée)"
+      sub="!$iid"; [ "$trivial" = "true" ] && sub="!$iid · review sautée (à reviewer toi-même)"
       terminal-notifier -title "$kind — $u" -subtitle "$sub" -message "$title" -open "$url" -group "mrwatch-$iid" 2>>"$LOG"
       ntfy_send "$kind: $u" "!$iid $title" "$url" "bell"
       printf '%s\t%s\n' "$iid" "$sha" >> "$NEWSTATE"
       if [ "$trivial" = "true" ]; then
-        post_eligible=false   # rien de substantiel à commenter -> pas d'auto-post
-        log "SKIP-REVIEW !$iid $u (trivial : dépendances only)"
+        post_eligible=false          # rien de substantiel à commenter -> pas d'auto-post
+        trivial_reminded_at=$NOW     # cette notif compte comme 1re relance ; la suivante dans TRIVIAL_REMINDER_MIN
+        log "SKIP-REVIEW !$iid $u (trivial : bump/petit changement)"
       else
         log "DETECT $kind !$iid $u sha=$sha"
         # La review claude est LENTE (plusieurs min). On la met en file et on la lance APRÈS avoir
@@ -246,11 +278,12 @@ for u in "${USERS[@]}"; do
       --argjson approved "$approved" --arg firstSeen "$first_seen" --argjson notified2h "$notified2h" \
       --argjson postEligible "$post_eligible" --argjson reviewPosted "$review_posted" \
       --argjson approvalsLeft "$approvals_left" --argjson lastApproverNotifiedAt "$last_notif_at" \
-      --argjson trivial "$trivial" \
+      --argjson trivial "$trivial" --argjson trivialRemindedAt "$trivial_reminded_at" \
       '{iid:$iid, author:$author, title:$title, url:$url, approved:$approved,
         firstSeen:(if $firstSeen=="" then null else ($firstSeen|tonumber) end), notified2h:$notified2h,
         postEligible:$postEligible, reviewPosted:$reviewPosted,
-        approvalsLeft:$approvalsLeft, lastApproverNotifiedAt:$lastApproverNotifiedAt, trivial:$trivial}' >> "$OPENTMP"
+        approvalsLeft:$approvalsLeft, lastApproverNotifiedAt:$lastApproverNotifiedAt,
+        trivial:$trivial, trivialRemindedAt:$trivialRemindedAt}' >> "$OPENTMP"
   done
 done
 

@@ -20,7 +20,8 @@ Toutes les 15 min, **uniquement 8h-17h du lundi au vendredi** (auto-désactivé 
    (relance immédiate si je suis le **dernier approbateur** requis).
 6. **Auto-post (optionnel)** : ~15 min après la création d'une nouvelle MR, poste les commentaires de la
    review directement en **inline** sur la MR.
-7. **Saute les MR triviales** (bumps de dépendances) : pas de review ni d'auto-post, juste la notif.
+7. **Saute les MR triviales** (bump de dépendances **ou** petit changement 1-2 fichiers) : pas de review
+   ni d'auto-post ; me **relance toutes les 15 min** « à reviewer toi-même » jusqu'à ce que je l'approuve.
 8. **Auto-évaluation (optionnel)** : après merge d'une MR reviewée, compare ma review aux commentaires
    humains réels et produit un score « attrapé / manqué ».
 9. **Alerte de santé** : me prévient (ntfy + widget) si les appels GitLab échouent en série ou si le bot
@@ -69,14 +70,24 @@ Réglages `config.json` : `auto_post_review` = `false` (off, défaut) | `true` (
 Test manuel sur une MR précise : `bash post-review.sh <iid>` (poste réel) ou
 `POST_DRYRUN=1 bash post-review.sh <iid>` (simulation).
 
-### Saut des MR triviales (bumps de dépendances)
+### Saut des MR triviales (bump ou petit changement)
 
-Quand `skip_trivial_reviews` est actif (défaut), `check.sh` regarde le diff d'une **nouvelle** MR :
-si elle ne touche QUE des **manifestes de dépendances** (`trivial_file_patterns` : `Directory.Packages.props`,
-`*.csproj`, `*.props`, `package.json`, lockfiles) et ≤ `trivial_max_files` (défaut 3) fichiers, la review
-`claude` (et l'auto-post) sont **sautés** — inutile d'analyser un simple bump de version. La MR est quand
-même notifiée et visible dans le widget (marquée `🔧 Bump de dépendance — review sautée`). Au moindre
-doute (fichier de code présent, trop de fichiers, API KO), la review a lieu normalement.
+Quand `skip_trivial_reviews` est actif (défaut), `check.sh` regarde le diff d'une **nouvelle** MR et la
+juge **triviale** dans deux cas :
+
+- **Petit changement** : ≤ `trivial_small_max_files` fichiers (défaut 2) **et** ≤ `trivial_small_max_lines`
+  lignes changées (défaut 30). Un gros remaniement d'un seul fichier n'est donc PAS trivial.
+- **Bump de dépendances** : ne touche QUE des manifestes (`trivial_file_patterns` : `Directory.Packages.props`,
+  `*.csproj`, `*.props`, `package.json`, lockfiles) et ≤ `trivial_max_files` fichiers (défaut 3).
+
+Pour une MR triviale, la review `claude` **et** l'auto-post sont **sautés** (rien de substantiel à
+analyser/commenter). À la place, le bot me **relance toutes les `trivial_reminder_minutes` (défaut 15)**
+avec « 🔎 À reviewer toi-même » jusqu'à ce que je l'approuve. La MR est visible dans le widget (marquée
+`🔧 Review sautée (bump / petit changement)`). Au moindre doute (fichier de code volumineux, trop de
+fichiers, API KO), la review a lieu normalement.
+
+Priorité des relances sur une MR non approuvée : **🎯 dernier approbateur** > **🔎 triviale à reviewer** >
+**⏰ en attente > seuil**.
 
 ### Auto-évaluation vs les reviewers (score attrapé / manqué)
 
@@ -179,7 +190,7 @@ Priorité d'affichage : santé `⚠️` > dernier approbateur `🎯` > en retard
 
 | Fichier | Rôle |
 |---|---|
-| `config.json` | Watchlist, heures, `approval_nag_hours`, `last_approver_repeat_minutes` (relance dernier approbateur, défaut 15), auto-post (`auto_post_review`, `post_delay_minutes`), santé (`health_alert_after`), skip trivial (`skip_trivial_reviews`, `trivial_max_files`, `trivial_file_patterns`), auto-éval (`auto_grade_reviews`), modèle, plafond diff, `repo_dir`, `local_repo_dir`, filtre IA (`learn_ai_filter`, `learn_exclude_authors`, `learn_ai_markers`). **À éditer ici.** |
+| `config.json` | Watchlist, heures, `approval_nag_hours`, `last_approver_repeat_minutes` (relance dernier approbateur, défaut 15), auto-post (`auto_post_review`, `post_delay_minutes`), santé (`health_alert_after`), skip trivial (`skip_trivial_reviews`, `trivial_max_files`, `trivial_file_patterns`, `trivial_small_max_files`, `trivial_small_max_lines`, `trivial_reminder_minutes`), auto-éval (`auto_grade_reviews`), modèle, plafond diff, `repo_dir`, `local_repo_dir`, filtre IA (`learn_ai_filter`, `learn_exclude_authors`, `learn_ai_markers`). **À éditer ici.** |
 | `config.example.json` | Template de config à copier vers `config.json` (non versionné). |
 | `check.sh` | Détection + notif + approbations + reviews + auto-post + skip trivial + santé + auto-éval. Toutes les 15 min (launchd). |
 | `force-check.sh` | Force un passage de `check.sh` maintenant (bouton du widget). |
