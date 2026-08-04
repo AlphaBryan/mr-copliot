@@ -171,7 +171,8 @@ Priorité d'affichage : santé `⚠️` > dernier approbateur `🎯` > en retard
   qui ouvre la MR), **📄 Ouvrir le rapport** (ou `🔧 Bump — review sautée` pour une MR triviale).
 - Actions : **↻ Forcer un check**, **🔎 Reviewer ma branche locale**, **📁 Dossier des rapports**,
   **📜 Voir les logs** (dossier des logs + `check.log` / `learn.log` / dernier `post-*.log`, plus un
-  aperçu des dernières lignes de `check.log`), **↻ Rafraîchir**.
+  aperçu des dernières lignes de `check.log`), **📊 Voir les notes** (tendance d'auto-évaluation :
+  attrapé/total + %, et les dernières MR notées, depuis `grades/summary.tsv`), **↻ Rafraîchir**.
 
 ## Fichiers
 

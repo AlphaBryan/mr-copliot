@@ -176,4 +176,29 @@ if [ -f "$LOGDIR/check.log" ]; then
   done
 fi
 
+# --- Notes d'auto-évaluation (sous-menu) ---
+GRADESDIR="$DIR/grades"
+GSUMMARY="$GRADESDIR/summary.tsv"
+if [ -f "$GSUMMARY" ]; then
+  # agrégat sur toutes les MR notées : attrapés / total de points humains
+  agg=$(awk -F'\t' 'NF>=6{hp+=$3; c+=$4; m+=$5; e+=$6; n++} END{ pct=(hp>0)?int(c*100/hp):0; printf "%d\t%d\t%d\t%d\t%d\t%d", n, hp, c, m, e, pct }' "$GSUMMARY")
+  n_g=$(printf '%s' "$agg" | cut -f1); g_hp=$(printf '%s' "$agg" | cut -f2)
+  g_c=$(printf '%s' "$agg" | cut -f3); g_m=$(printf '%s' "$agg" | cut -f4)
+  g_e=$(printf '%s' "$agg" | cut -f5); g_pct=$(printf '%s' "$agg" | cut -f6)
+  echo "📊 Voir les notes ($g_c/$g_hp · ${g_pct}%)"
+  echo "-- Attrapé $g_c/$g_hp points humains (${g_pct}%) sur $n_g MR · $g_m manqués · $g_e en plus | size=11 color=gray"
+  echo "-- 📁 Dossier des notes | bash=/usr/bin/open param1=$GRADESDIR terminal=false"
+  echo "-----"
+  echo "-- Dernières MR notées | size=11 color=gray"
+  ls -t "$GRADESDIR"/mr*.md 2>/dev/null | head -5 | while IFS= read -r gf; do
+    giid=$(basename "$gf" | sed -E 's/^mr([0-9]+)-.*/\1/')
+    line=$(awk -F'\t' -v id="$giid" '$2==id{r=$0} END{print r}' "$GSUMMARY")
+    hpp=$(printf '%s' "$line" | cut -f3); cc=$(printf '%s' "$line" | cut -f4)
+    echo "-- !$giid : $cc/$hpp attrapés | bash=/usr/bin/open param1=-a param2=\"$APP\" param3=$gf terminal=false"
+  done
+else
+  echo "📊 Voir les notes"
+  echo "-- (aucune note encore — activer auto_grade_reviews) | color=gray"
+fi
+
 echo "↻ Rafraîchir l'affichage | refresh=true"
