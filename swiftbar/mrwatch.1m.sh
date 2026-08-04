@@ -103,6 +103,7 @@ else
     approved=$(jq -r ".[$j].approved // false" "$OPENJSON" 2>/dev/null)
     firstSeen=$(jq -r ".[$j].firstSeen // empty" "$OPENJSON" 2>/dev/null)
     approvalsLeft=$(jq -r ".[$j].approvalsLeft // -1" "$OPENJSON" 2>/dev/null)
+    trivial=$(jq -r ".[$j].trivial // false" "$OPENJSON" 2>/dev/null)
     j=$((j + 1))
     report=$(ls -t "$RDIR"/*-mr"$iid"-*.md 2>/dev/null | head -1)
 
@@ -135,6 +136,8 @@ else
     echo "-- 🌐 Ouvrir la MR | href=$url"
     if [ -n "$report" ]; then
       echo "-- 📄 Ouvrir le rapport | bash=/usr/bin/open param1=-a param2=\"$APP\" param3=$report terminal=false"
+    elif [ "$trivial" = "true" ]; then
+      echo "-- 🔧 Bump de dépendance — review sautée | color=gray"
     else
       echo "-- (rapport pas encore généré) | color=gray"
     fi

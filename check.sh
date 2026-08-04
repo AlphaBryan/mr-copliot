@@ -34,6 +34,29 @@ REVIEWS_DIR=$(jq -r '.reviews_dir // ""' "$CONFIG"); [ -z "$REVIEWS_DIR" ] && RE
 # Santé : alerte après N passages consécutifs où les appels GitLab échouent (dead-man's switch).
 HEALTH="$DIR/health.json"
 HALERT_AFTER=$(jq -r '.health_alert_after // 3' "$CONFIG")
+# Skip des MR triviales : diff ne touchant QUE des manifestes de dépendances (bumps).
+SKIP_TRIVIAL=$(jq -r '.skip_trivial_reviews // true' "$CONFIG")
+TRIVIAL_MAX_FILES=$(jq -r '.trivial_max_files // 3' "$CONFIG")
+TRIVIAL_PATTERNS_JSON=$(jq -c '.trivial_file_patterns // ["Directory.Packages.props","*.csproj","*.props","package.json","package-lock.json","yarn.lock","pnpm-lock.yaml"]' "$CONFIG")
+
+# Renvoie "true" si la MR ne modifie QUE des fichiers de dépendances (≤ TRIVIAL_MAX_FILES).
+# Échec API / doute -> "false" (on fait la review : on ne skippe jamais à tort).
+is_trivial_mr() {
+  local iid="$1" d n f base match
+  d=$(glab api "projects/$ENC/merge_requests/$iid/diffs?per_page=50" 2>>"$LOG")
+  printf '%s' "$d" | jq -e 'type=="array"' >/dev/null 2>&1 || { echo false; return; }
+  n=$(printf '%s' "$d" | jq 'length'); [ -z "$n" ] && n=0
+  { [ "$n" -eq 0 ] || [ "$n" -gt "$TRIVIAL_MAX_FILES" ]; } && { echo false; return; }
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    base=$(basename "$f"); match=0
+    while IFS= read -r pat; do
+      case "$base" in $pat) match=1; break;; esac
+    done < <(printf '%s' "$TRIVIAL_PATTERNS_JSON" | jq -r '.[]')
+    [ "$match" -eq 0 ] && { echo false; return; }
+  done < <(printf '%s' "$d" | jq -r '.[].new_path')
+  echo true
+}
 
 USERS=()
 while IFS= read -r u; do [ -n "$u" ] && USERS+=("$u"); done < <(jq -r '.watch_users[]' "$CONFIG")
@@ -149,6 +172,7 @@ for u in "${USERS[@]}"; do
     # État d'auto-post reporté du passage précédent (open.json).
     post_eligible=$(prev_field "$iid" postEligible); [ "$post_eligible" = "true" ] || post_eligible=false
     review_posted=$(prev_field "$iid" reviewPosted); [ "$review_posted" = "true" ] || review_posted=false
+    trivial=$(prev_field "$iid" trivial); [ "$trivial" = "true" ] || trivial=false
 
     if [ "$SEED" -eq 1 ]; then
       printf '%s\t%s\n' "$iid" "$sha" >> "$NEWSTATE"
@@ -156,13 +180,22 @@ for u in "${USERS[@]}"; do
       post_eligible=false   # baseline : les MR déjà ouvertes ne s'auto-postent jamais
     elif [ "$INHOURS" -eq 1 ] && [ "$prev" != "$sha" ]; then
       if [ -z "$prev" ]; then kind="Nouvelle MR"; post_eligible=true; else kind="MR mise a jour"; fi
-      terminal-notifier -title "$kind — $u" -subtitle "!$iid" -message "$title" -open "$url" -group "mrwatch-$iid" 2>>"$LOG"
+      # MR triviale (bump de dépendances) ? On teste seulement à la 1re détection.
+      trivial=false
+      [ "$SKIP_TRIVIAL" = "true" ] && [ -z "$prev" ] && trivial=$(is_trivial_mr "$iid")
+      sub="!$iid"; [ "$trivial" = "true" ] && sub="!$iid · bump (review sautée)"
+      terminal-notifier -title "$kind — $u" -subtitle "$sub" -message "$title" -open "$url" -group "mrwatch-$iid" 2>>"$LOG"
       ntfy_send "$kind: $u" "!$iid $title" "$url" "bell"
       printf '%s\t%s\n' "$iid" "$sha" >> "$NEWSTATE"
-      log "DETECT $kind !$iid $u sha=$sha"
-      # Synchrone (garde-fou) : sous launchd un enfant en arrière-plan (nohup &) est tué
-      # quand le job parent se termine. On lance donc la review en avant-plan.
-      timeout 600 /bin/bash "$DIR/review.sh" "$iid" >> "$DIR/logs/review-$iid.log" 2>&1
+      if [ "$trivial" = "true" ]; then
+        post_eligible=false   # rien de substantiel à commenter -> pas d'auto-post
+        log "SKIP-REVIEW !$iid $u (trivial : dépendances only)"
+      else
+        log "DETECT $kind !$iid $u sha=$sha"
+        # Synchrone (garde-fou) : sous launchd un enfant en arrière-plan (nohup &) est tué
+        # quand le job parent se termine. On lance donc la review en avant-plan.
+        timeout 600 /bin/bash "$DIR/review.sh" "$iid" >> "$DIR/logs/review-$iid.log" 2>&1
+      fi
     else
       # MR inchangée, ou hors heures : on conserve l'entrée existante si elle existe.
       # (jamais vue + hors heures -> non ajoutée -> sera reviewée au prochain passage en heures actives)
@@ -194,10 +227,11 @@ for u in "${USERS[@]}"; do
       --argjson approved "$approved" --arg firstSeen "$first_seen" --argjson notified2h "$notified2h" \
       --argjson postEligible "$post_eligible" --argjson reviewPosted "$review_posted" \
       --argjson approvalsLeft "$approvals_left" --argjson notifiedLast "$notified_last" \
+      --argjson trivial "$trivial" \
       '{iid:$iid, author:$author, title:$title, url:$url, approved:$approved,
         firstSeen:(if $firstSeen=="" then null else ($firstSeen|tonumber) end), notified2h:$notified2h,
         postEligible:$postEligible, reviewPosted:$reviewPosted,
-        approvalsLeft:$approvalsLeft, notifiedLast:$notifiedLast}' >> "$OPENTMP"
+        approvalsLeft:$approvalsLeft, notifiedLast:$notifiedLast, trivial:$trivial}' >> "$OPENTMP"
   done
 done
 
