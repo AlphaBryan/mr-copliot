@@ -109,6 +109,8 @@ OLD_IIDS=$(jq -r '.[].iid' "$DIR/open.json" 2>/dev/null | sort -u)
 NEWSTATE=$(mktemp)   # journal anti-doublon reconstruit (uniquement les MR encore ouvertes)
 OPENTMP=$(mktemp)    # snapshot des MR ouvertes, pour le widget
 FETCH_FAILED=0       # passe à 1 si un appel glab échoue (auth/DNS/réseau)
+FAILED_USERS=" "     # liste des users dont le fetch a échoué (pour conserver LEURS MR dans open.json)
+REVIEW_QUEUE=" "     # iids à reviewer APRÈS la boucle (la review claude est lente : on persiste d'abord)
 
 for u in "${USERS[@]}"; do
   json=$(glab api "projects/$ENC/merge_requests?state=opened&author_username=$u&wip=no&per_page=50" 2>>"$LOG")
@@ -118,6 +120,7 @@ for u in "${USERS[@]}"; do
   if [ "$rc" -ne 0 ] || ! printf '%s' "$json" | jq -e 'type == "array"' >/dev/null 2>&1; then
     log "ERROR appel glab échoué pour $u (rc=$rc) — MR de $u NON vérifiées ce passage, état préservé"
     FETCH_FAILED=1
+    FAILED_USERS="$FAILED_USERS$u "
     continue
   fi
   count=$(printf '%s' "$json" | jq 'length' 2>/dev/null || echo 0)
@@ -208,9 +211,9 @@ for u in "${USERS[@]}"; do
         log "SKIP-REVIEW !$iid $u (trivial : dépendances only)"
       else
         log "DETECT $kind !$iid $u sha=$sha"
-        # Synchrone (garde-fou) : sous launchd un enfant en arrière-plan (nohup &) est tué
-        # quand le job parent se termine. On lance donc la review en avant-plan.
-        timeout 600 /bin/bash "$DIR/review.sh" "$iid" >> "$DIR/logs/review-$iid.log" 2>&1
+        # La review claude est LENTE (plusieurs min). On la met en file et on la lance APRÈS avoir
+        # écrit open.json/state, pour que le widget reflète la MR même si la review est interrompue.
+        REVIEW_QUEUE="$REVIEW_QUEUE$iid "
       fi
     else
       # MR inchangée, ou hors heures : on conserve l'entrée existante si elle existe.
@@ -251,24 +254,42 @@ for u in "${USERS[@]}"; do
   done
 done
 
-# Si un appel glab a échoué ce passage, on n'a PAS la liste complète des MR ouvertes.
-# On reporte donc les entrées d'état précédentes manquantes pour ne pas élaguer à tort
-# (sinon, au prochain run réussi, les MR connues seraient re-notifiées + re-reviewées).
+# --- open.json (widget) : écrit AVANT les reviews lentes, et robuste à un échec partiel ---
+# Les notifs sont déjà parties pendant la boucle ; on doit garantir que le widget reflète les MR
+# détectées, même si (a) le fetch d'un collègue a échoué, ou (b) une review claude est lente/coupée.
+if [ "$FETCH_FAILED" -eq 0 ]; then
+  jq -s '.' "$OPENTMP" > "$DIR/open.json" 2>/dev/null || printf '[]\n' > "$DIR/open.json"
+else
+  # Fusion : MR fraîches des users OK (OPENTMP) + dernières MR connues des users EN ÉCHEC
+  # (reprises de l'ancien open.json — leurs MR n'ont pas pu être refetchées ce passage).
+  carried=$(jq -c --arg fu "$FAILED_USERS" '[.[] | select(.author as $a | $fu | contains(" " + $a + " "))]' "$DIR/open.json" 2>/dev/null)
+  [ -z "$carried" ] && carried="[]"
+  if { jq -s '.' "$OPENTMP" 2>/dev/null || echo "[]"; printf '%s\n' "$carried"; } | jq -s 'add' > "$DIR/open.json.tmp" 2>/dev/null; then
+    mv "$DIR/open.json.tmp" "$DIR/open.json"
+  else
+    rm -f "$DIR/open.json.tmp"; log "WARN open.json (fusion) échec — ancien conservé"
+  fi
+fi
+rm -f "$OPENTMP"
+
+# --- Reviews en file (LENTES) : lancées APRÈS l'écriture de open.json ---
+# Ainsi le widget montre la MR immédiatement ; une review interrompue ne bloque plus le snapshot.
+if [ "$SEED" -ne 1 ]; then
+  for rid in $REVIEW_QUEUE; do
+    log "REVIEW !$rid (file)"
+    timeout 600 /bin/bash "$DIR/review.sh" "$rid" >> "$DIR/logs/review-$rid.log" 2>&1
+  done
+fi
+
+# --- État (dédup) : écrit APRÈS les reviews, pour qu'une review interrompue soit RETENTÉE au prochain passage. ---
+# Sur échec partiel, on reporte les entrées d'état des users non refetchés pour ne pas élaguer à tort.
 if [ "$FETCH_FAILED" -eq 1 ] && [ -f "$STATE" ]; then
   while IFS=$'\t' read -r k v; do
     [ -n "$k" ] || continue
     awk -F'\t' -v key="$k" '$1==key{f=1} END{exit !f}' "$NEWSTATE" || printf '%s\t%s\n' "$k" "$v" >> "$NEWSTATE"
   done < "$STATE"
 fi
-
-# Remplace l'état (élague automatiquement les MR mergées / fermées / passées en draft)
 mv "$NEWSTATE" "$STATE"
-# Écrit le snapshot pour le widget (tableau vide si aucune MR ouverte).
-# En cas d'échec API, le snapshot est incomplet → on garde le dernier bon open.json.
-if [ "$FETCH_FAILED" -eq 0 ]; then
-  jq -s '.' "$OPENTMP" > "$DIR/open.json" 2>/dev/null || printf '[]\n' > "$DIR/open.json"
-fi
-rm -f "$OPENTMP"
 
 # --- Auto-évaluation des MR mergées que j'avais reviewées ---
 # Une MR présente au passage précédent et absente maintenant a été mergée/fermée. Si j'ai un

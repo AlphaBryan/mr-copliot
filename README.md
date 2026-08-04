@@ -245,4 +245,8 @@ MRWATCH_SKIP_FETCH=1 bash review.sh 3806   # re-run sans refetch (refs déjà lo
   ou le découpage. Un `fichier:ligne` est toujours un vrai numéro de ligne (jamais un SHA).
 - **Auto-post** : action publique sous ton compte GitLab. Pour couper, mettre `auto_post_review` à
   `false` dans `config.json`. Pour un test contrôlé, `POST_DRYRUN=1 bash post-review.sh <iid>`.
+- **Robustesse du widget** : `open.json` est écrit **avant** les reviews (lentes, mises en file et
+  lancées ensuite) et **survit à un échec partiel** (fetch d'un collègue KO → on garde ses dernières
+  MR connues et on met à jour celles des collègues récupérés). Donc une MR déjà notifiée apparaît
+  toujours dans le widget, même si une review est lente/interrompue ou qu'un fetch flanche.
 - À la 1re notification, macOS demandera l'autorisation pour `terminal-notifier` (accepter une fois).
