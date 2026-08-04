@@ -8,6 +8,8 @@
   "work_end_hour": 17,
   "work_days": [1, 2, 3, 4, 5],
   "approval_nag_hours": 2,
+  "auto_post_review": false,
+  "post_delay_minutes": 15,
   "review_model": "sonnet",
   "max_diff_lines": 2500,
   "learn_from_reviewers": [

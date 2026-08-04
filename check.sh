@@ -25,6 +25,12 @@ WS=$(jq -r '.work_start_hour' "$CONFIG")
 WE=$(jq -r '.work_end_hour' "$CONFIG")
 NAG_HOURS=$(jq -r '.approval_nag_hours // 2' "$CONFIG")
 NAG_SECS=$((NAG_HOURS * 3600))
+# Auto-post de la review (inline) ~post_delay_minutes après la création de la MR.
+# Valeurs possibles de auto_post_review : false (défaut, off) | true (poste réel) | "dryrun" (journalise sans envoyer).
+AUTO_POST=$(jq -r '.auto_post_review // false' "$CONFIG")
+POST_DELAY_MIN=$(jq -r '.post_delay_minutes // 15' "$CONFIG")
+POST_DELAY_SECS=$((POST_DELAY_MIN * 60))
+REVIEWS_DIR=$(jq -r '.reviews_dir // ""' "$CONFIG"); [ -z "$REVIEWS_DIR" ] && REVIEWS_DIR="$DIR/reviews"
 
 USERS=()
 while IFS= read -r u; do [ -n "$u" ] && USERS+=("$u"); done < <(jq -r '.watch_users[]' "$CONFIG")
@@ -89,9 +95,14 @@ for u in "${USERS[@]}"; do
     url=$(printf '%s' "$json"    | jq -r ".[$i].web_url")
     draft=$(printf '%s' "$json"  | jq -r ".[$i].draft")
     author=$(printf '%s' "$json" | jq -r ".[$i].author.username")
+    created=$(printf '%s' "$json" | jq -r ".[$i].created_at")
     i=$((i + 1))
 
     [ "$draft" = "true" ] && continue
+
+    # created_at (UTC, ISO8601 avec fraction+Z) -> epoch, pour le délai d'auto-post
+    cbase="${created%.*}"; cbase="${cbase%Z}"
+    created_epoch=$(date -u -j -f "%Y-%m-%dT%H:%M:%S" "$cbase" +%s 2>/dev/null); [ -z "$created_epoch" ] && created_epoch=0
 
     # --- mon statut d'approbation + suivi du délai sans mon approbation ---
     appr=$(glab api "projects/$ENC/merge_requests/$iid/approvals" 2>>"$LOG")
@@ -118,22 +129,17 @@ for u in "${USERS[@]}"; do
       fi
     fi
 
-    # snapshot widget : toute MR ouverte non-draft, avec mon statut d'approbation
-    jq -nc --arg iid "$iid" --arg author "$author" --arg title "$title" --arg url "$url" \
-      --argjson approved "$approved" --arg firstSeen "$first_seen" --argjson notified2h "$notified2h" \
-      '{iid:$iid, author:$author, title:$title, url:$url, approved:$approved,
-        firstSeen:(if $firstSeen=="" then null else ($firstSeen|tonumber) end), notified2h:$notified2h}' >> "$OPENTMP"
-
     prev=$(get_sha "$iid")
+    # État d'auto-post reporté du passage précédent (open.json).
+    post_eligible=$(prev_field "$iid" postEligible); [ "$post_eligible" = "true" ] || post_eligible=false
+    review_posted=$(prev_field "$iid" reviewPosted); [ "$review_posted" = "true" ] || review_posted=false
 
     if [ "$SEED" -eq 1 ]; then
       printf '%s\t%s\n' "$iid" "$sha" >> "$NEWSTATE"
       log "SEED !$iid $u"
-      continue
-    fi
-
-    if [ "$INHOURS" -eq 1 ] && [ "$prev" != "$sha" ]; then
-      if [ -z "$prev" ]; then kind="Nouvelle MR"; else kind="MR mise a jour"; fi
+      post_eligible=false   # baseline : les MR déjà ouvertes ne s'auto-postent jamais
+    elif [ "$INHOURS" -eq 1 ] && [ "$prev" != "$sha" ]; then
+      if [ -z "$prev" ]; then kind="Nouvelle MR"; post_eligible=true; else kind="MR mise a jour"; fi
       terminal-notifier -title "$kind — $u" -subtitle "!$iid" -message "$title" -open "$url" -group "mrwatch-$iid" 2>>"$LOG"
       ntfy_send "$kind: $u" "!$iid $title" "$url" "bell"
       printf '%s\t%s\n' "$iid" "$sha" >> "$NEWSTATE"
@@ -146,6 +152,34 @@ for u in "${USERS[@]}"; do
       # (jamais vue + hors heures -> non ajoutée -> sera reviewée au prochain passage en heures actives)
       [ -n "$prev" ] && printf '%s\t%s\n' "$iid" "$prev" >> "$NEWSTATE"
     fi
+
+    # --- Auto-post de la review en commentaires inline, ~POST_DELAY après la création ---
+    # Ne concerne QUE les MR éligibles (détectées neuves depuis l'activation), une seule fois,
+    # une fois le rapport prêt et le délai écoulé, en heures actives.
+    if [ "$SEED" -ne 1 ] && [ "$AUTO_POST" != "false" ] && [ "$post_eligible" = "true" ] \
+       && [ "$review_posted" != "true" ] && [ "$INHOURS" -eq 1 ] \
+       && [ "$created_epoch" -gt 0 ] && [ "$((NOW - created_epoch))" -ge "$POST_DELAY_SECS" ]; then
+      report=$(ls -t "$REVIEWS_DIR"/*-mr"$iid"-*.md 2>/dev/null | head -1)
+      if [ -n "$report" ]; then
+        [ "$AUTO_POST" = "dryrun" ] && pdry=1 || pdry=0
+        if POST_DRYRUN="$pdry" timeout 300 /bin/bash "$DIR/post-review.sh" "$iid" "$report" >> "$DIR/logs/post-$iid.log" 2>&1; then
+          review_posted=true
+          log "POSTED review !$iid (dryrun=$pdry, auteur=$author)"
+        else
+          log "WARN post-review !$iid a échoué (rc=$?)"
+        fi
+      else
+        log "post !$iid différé — rapport pas encore prêt"
+      fi
+    fi
+
+    # snapshot widget : toute MR ouverte non-draft, avec statut d'approbation + auto-post
+    jq -nc --arg iid "$iid" --arg author "$author" --arg title "$title" --arg url "$url" \
+      --argjson approved "$approved" --arg firstSeen "$first_seen" --argjson notified2h "$notified2h" \
+      --argjson postEligible "$post_eligible" --argjson reviewPosted "$review_posted" \
+      '{iid:$iid, author:$author, title:$title, url:$url, approved:$approved,
+        firstSeen:(if $firstSeen=="" then null else ($firstSeen|tonumber) end), notified2h:$notified2h,
+        postEligible:$postEligible, reviewPosted:$reviewPosted}' >> "$OPENTMP"
   done
 done
 

@@ -33,6 +33,27 @@ je l'ai déjà approuvée (`user_has_approved`) et l'inscrit dans `open.json` (`
 - **Menu déroulant** : `✅` grisé = déjà approuvée ; `🟡` = à approuver (< seuil, avec délai) ;
   `🔴` rouge = en attente au-delà du seuil (avec le temps écoulé).
 
+### Auto-post de la review sur la MR (inline)
+
+Quand `auto_post_review` est actif, `check.sh` poste la **section 4** du rapport (« Commentaires prêts
+à coller ») directement sur la MR, **~`post_delay_minutes` (défaut 15) après la création de la MR**, une
+seule fois, en heures actives. `post-review.sh <iid>` fait le travail :
+
+- Chaque `- **\`fichier:ligne\`** — texte` devient une **discussion inline** ancrée sur la ligne du
+  diff (positions `base/head/start_sha` de l'API GitLab, ligne ajoutée ou de contexte détectée par un
+  parseur de diff).
+- **Repli sans perte** : tout commentaire non ancrable (ligne hors diff, SHA au lieu d'un numéro de
+  ligne, ou POST rejeté par l'API) est regroupé dans **une seule note générale** — rien n'est perdu.
+- **Garde-fous** : ne poste que les MR **détectées neuves depuis l'activation** (les MR déjà ouvertes
+  au moment d'activer ne sont jamais rétro-postées, via `postEligible`), **une seule fois**
+  (`reviewPosted`), jamais sur une simple mise à jour de commits.
+
+Réglages `config.json` : `auto_post_review` = `false` (off, défaut) | `true` (poste réel) | `"dryrun"`
+(journalise dans `logs/post-<iid>.log` sans rien envoyer) ; `post_delay_minutes` (défaut 15).
+
+Test manuel sur une MR précise : `bash post-review.sh <iid>` (poste réel) ou
+`POST_DRYRUN=1 bash post-review.sh <iid>` (simulation).
+
 ### Auto-apprentissage du style des reviewers
 
 2x/jour (8h05 et 13h05), `learn.sh` lit les **commentaires des reviewers seniors** (liste
@@ -84,10 +105,11 @@ d'ouvrir la MR. Notif au lancement, puis notif cliquable quand le rapport est pr
 
 | Fichier | Rôle |
 |---|---|
-| `config.json` | Watchlist, heures, `approval_nag_hours` (seuil relance, défaut 2), modèle, plafond diff, `repo_dir`, `local_repo_dir`, `learn_from_reviewers`, `learn_window_days`, `learn_model`, filtre IA (`learn_ai_filter`, `learn_exclude_authors`, `learn_ai_markers`). **À éditer ici.** |
+| `config.json` | Watchlist, heures, `approval_nag_hours` (seuil relance, défaut 2), auto-post (`auto_post_review`, `post_delay_minutes`), modèle, plafond diff, `repo_dir`, `local_repo_dir`, `learn_from_reviewers`, `learn_window_days`, `learn_model`, filtre IA (`learn_ai_filter`, `learn_exclude_authors`, `learn_ai_markers`). **À éditer ici.** |
 | `check.sh` | Détection + notif + déclenche les reviews. |
 | `review.sh <iid>` | Génère un rapport pour une MR (mode repo via worktree, repli diff). |
 | `review-local.sh [repo]` | Review la branche locale courante (commité + non commité). |
+| `post-review.sh <iid>` | Poste la section 4 d'un rapport en commentaires inline sur la MR (repli en note générale). `POST_DRYRUN=1` = simulation. |
 | `review-local-launch.sh` | Lance `review-local.sh` détaché (utilisé par le bouton du widget). |
 | `learn.sh` | Apprend le style des reviewers seniors → met à jour `prompts/learned-style.md`. 2x/jour (8h05, 13h05). |
 | `prompts/review-prompt.md` | Le prompt de review (modifiable pour ajouter des critères). |
