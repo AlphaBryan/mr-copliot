@@ -51,13 +51,15 @@ fi
 #   total      = MR ouvertes non-draft
 #   unapproved = celles que JE n'ai pas encore approuvées (approved != true)
 #   overdue    = unapproved dont le délai d'attente dépasse le seuil
-total=0; unapproved=0; overdue=0
+total=0; unapproved=0; overdue=0; lastapprover=0
 if [ -f "$OPENJSON" ]; then
   total=$(jq 'length' "$OPENJSON" 2>/dev/null); [ -z "$total" ] && total=0
   unapproved=$(jq '[.[] | select(.approved != true)] | length' "$OPENJSON" 2>/dev/null); [ -z "$unapproved" ] && unapproved=0
   overdue=$(jq --argjson now "$now" --argjson t "$NAG_SECS" \
     '[.[] | select(.approved != true and .firstSeen != null and ($now - .firstSeen) >= $t)] | length' \
     "$OPENJSON" 2>/dev/null); [ -z "$overdue" ] && overdue=0
+  # MR dont je suis le DERNIER approbateur requis (n'attend plus qu'une approbation, pas la mienne)
+  lastapprover=$(jq '[.[] | select(.approved != true and .approvalsLeft == 1)] | length' "$OPENJSON" 2>/dev/null); [ -z "$lastapprover" ] && lastapprover=0
 fi
 
 # --- Titre dans la barre de menu ---
@@ -65,6 +67,8 @@ if [ "$loaded" -ne 1 ]; then
   echo "🔍⏹"
 elif [ "$health_warn" -eq 1 ]; then
   echo "🔍⚠️"                                  # bot en peine : API en échec ou plus de passage récent
+elif [ "$lastapprover" -gt 0 ]; then
+  echo "🎯 $lastapprover"                      # tu es le dernier approbateur requis : ton aval débloque le merge
 elif [ "$overdue" -gt 0 ]; then
   echo "🔴 $unapproved"                       # pastille rouge : au moins une MR >${NAG_HOURS}h sans mon aval
 elif [ "$inhours" -eq 1 ]; then
@@ -81,7 +85,8 @@ if [ "$inhours" -eq 1 ]; then echo "Heures actives (${WS}h-${WE}h) | color=green
 lastts=$(tail -n 1 "$DIR/logs/check.log" 2>/dev/null | cut -c1-19)
 [ -n "$lastts" ] && echo "Dernier passage: $lastts | size=11 color=gray"
 if [ "$total" -gt 0 ]; then
-  echo "$unapproved à approuver · $overdue en retard (>${NAG_HOURS}h) | size=11 color=gray"
+  extra=""; [ "$lastapprover" -gt 0 ] && extra=" · 🎯 $lastapprover dont tu es le dernier"
+  echo "$unapproved à approuver · $overdue en retard (>${NAG_HOURS}h)$extra | size=11 color=gray"
 fi
 echo "---"
 
@@ -97,6 +102,7 @@ else
     url=$(jq -r ".[$j].url" "$OPENJSON" 2>/dev/null)
     approved=$(jq -r ".[$j].approved // false" "$OPENJSON" 2>/dev/null)
     firstSeen=$(jq -r ".[$j].firstSeen // empty" "$OPENJSON" 2>/dev/null)
+    approvalsLeft=$(jq -r ".[$j].approvalsLeft // -1" "$OPENJSON" 2>/dev/null)
     j=$((j + 1))
     report=$(ls -t "$RDIR"/*-mr"$iid"-*.md 2>/dev/null | head -1)
 
@@ -113,6 +119,9 @@ else
     if [ "$approved" = "true" ]; then
       echo "✅ !$iid · ${author:-?} | color=gray"
       status="Déjà approuvée par toi"
+    elif [ "$approvalsLeft" = "1" ]; then
+      echo "🎯 !$iid · ${author:-?} | color=orange"
+      status="Tu es le dernier à approuver${wait_txt:+ (depuis $wait_txt)} — ton aval débloque le merge"
     elif [ -n "$firstSeen" ] && [ "$((now - firstSeen))" -ge "$NAG_SECS" ]; then
       echo "🔴 !$iid · ${author:-?} | color=red"
       status="⏰ En attente de ton approbation depuis ${wait_txt}"

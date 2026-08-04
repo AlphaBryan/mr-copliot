@@ -107,23 +107,36 @@ for u in "${USERS[@]}"; do
     cbase="${created%.*}"; cbase="${cbase%Z}"
     created_epoch=$(date -u -j -f "%Y-%m-%dT%H:%M:%S" "$cbase" +%s 2>/dev/null); [ -z "$created_epoch" ] && created_epoch=0
 
-    # --- mon statut d'approbation + suivi du délai sans mon approbation ---
+    # --- mon statut d'approbation (+ approvals_left pour le nag « dernier approbateur ») ---
     appr=$(glab api "projects/$ENC/merge_requests/$iid/approvals" 2>>"$LOG")
     if printf '%s' "$appr" | jq -e 'has("user_has_approved")' >/dev/null 2>&1; then
       approved=$(printf '%s' "$appr" | jq -r '.user_has_approved')
+      approvals_left=$(printf '%s' "$appr" | jq -r '.approvals_left // -1')
     else
       # appel approvals KO : on réutilise la dernière valeur connue plutôt que d'inventer.
       approved=$(prev_field "$iid" approved); [ -z "$approved" ] && approved=false
+      approvals_left=$(prev_field "$iid" approvalsLeft); [ -z "$approvals_left" ] && approvals_left=-1
       log "WARN approvals indisponible !$iid — réutilise approved=$approved"
     fi
+    # « dernier approbateur » : la MR n'attend plus qu'UNE approbation et ce n'est pas la mienne.
+    last_approver=false
+    [ "$approved" != "true" ] && [ "$approvals_left" = "1" ] && last_approver=true
 
     if [ "$approved" = "true" ]; then
-      first_seen=""; notified2h=false
+      first_seen=""; notified2h=false; notified_last=false
     else
       first_seen=$(prev_field "$iid" firstSeen); [ -z "$first_seen" ] && first_seen=$NOW
       notified2h=$(prev_field "$iid" notified2h); [ "$notified2h" = "true" ] || notified2h=false
+      notified_last=$(prev_field "$iid" notifiedLast); [ "$notified_last" = "true" ] || notified_last=false
       age=$((NOW - first_seen))
-      if [ "$SEED" -ne 1 ] && [ "$INHOURS" -eq 1 ] && [ "$age" -ge "$NAG_SECS" ] && [ "$notified2h" != "true" ]; then
+      # Priorité au signal « tu es le dernier » : notif IMMÉDIATE (sans attendre le seuil de 2h), 1 fois.
+      if [ "$SEED" -ne 1 ] && [ "$INHOURS" -eq 1 ] && [ "$last_approver" = "true" ] && [ "$notified_last" != "true" ]; then
+        terminal-notifier -title "🎯 Dernier à approuver ($author)" -subtitle "!$iid n'attend que TON aval" -message "$title" -open "$url" -group "mrwatch-last-$iid" 2>>"$LOG"
+        ntfy_send "🎯 Dernier à approuver: $author" "!$iid $title — ton approbation débloque le merge" "$url" "dart"
+        notified_last=true
+        log "NAG-LAST !$iid $author (approvals_left=1)"
+      # Sinon, relance temporelle classique après le seuil.
+      elif [ "$SEED" -ne 1 ] && [ "$INHOURS" -eq 1 ] && [ "$age" -ge "$NAG_SECS" ] && [ "$notified2h" != "true" ]; then
         h=$((age / 3600)); m=$(((age % 3600) / 60))
         terminal-notifier -title "À approuver ($author)" -subtitle "!$iid en attente >${NAG_HOURS}h" -message "$title" -open "$url" -group "mrwatch-nag-$iid" 2>>"$LOG"
         ntfy_send "À approuver: $author" "!$iid $title (en attente ${h}h${m}m)" "$url" "hourglass"
@@ -180,9 +193,11 @@ for u in "${USERS[@]}"; do
     jq -nc --arg iid "$iid" --arg author "$author" --arg title "$title" --arg url "$url" \
       --argjson approved "$approved" --arg firstSeen "$first_seen" --argjson notified2h "$notified2h" \
       --argjson postEligible "$post_eligible" --argjson reviewPosted "$review_posted" \
+      --argjson approvalsLeft "$approvals_left" --argjson notifiedLast "$notified_last" \
       '{iid:$iid, author:$author, title:$title, url:$url, approved:$approved,
         firstSeen:(if $firstSeen=="" then null else ($firstSeen|tonumber) end), notified2h:$notified2h,
-        postEligible:$postEligible, reviewPosted:$reviewPosted}' >> "$OPENTMP"
+        postEligible:$postEligible, reviewPosted:$reviewPosted,
+        approvalsLeft:$approvalsLeft, notifiedLast:$notifiedLast}' >> "$OPENTMP"
   done
 done
 
