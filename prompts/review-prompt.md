@@ -27,7 +27,9 @@ Cherche SPÉCIFIQUEMENT :
 Liste seulement ce que tu trouves VRAIMENT. Pour chaque point : `fichier:ligne`, le problème, une suggestion concrète. Sinon « Rien à signaler ».
 
 ## 3. Bugs et incohérences (C# / TypeScript)
-Bugs probables, erreurs de logique, cas limites oubliés (null, vide, hors-limites, concurrence), incohérences entre le code et l'intention de la MR, mauvaise gestion d'erreur, changements incomplets cross-fichiers.
+Bugs probables, erreurs de logique, cas limites oubliés (null, vide, hors-limites, concurrence), incohérences entre le code et le **requis fonctionnel** (le ticket/le comportement attendu), mauvaise gestion d'erreur, changements incomplets cross-fichiers.
+
+> Ne commente PAS les métadonnées de la MR (voir Règles générales) : ni le texte de la description, ni les messages/portée des commits. On review le CODE, pas le formulaire de la MR.
 
 Pour chaque point : `fichier:ligne`, ce qui cloche, et POURQUOI c'est un problème (explication simple). Classe par gravité :
 - 🔴 Élevé (peut casser / donner un mauvais résultat / perte de données)
@@ -43,12 +45,19 @@ Pour CHAQUE commentaire, le format est exactement :
 - **`chemin/du/fichier.ext:LIGNE`** — le commentaire (1 à 3 phrases, ton direct et pédagogique ; pour une question, pose-la clairement).
 
 Règles :
-- Chaque commentaire DOIT pointer un `fichier:ligne` réel et confirmé.
+- Chaque commentaire DOIT pointer un `fichier:ligne` réel et confirmé. `LIGNE` est un **numéro de ligne source** — JAMAIS un SHA de commit, un hash, ni une plage de commits.
 - Si un point couvre plusieurs endroits, liste les lignes concernées.
 - N'invente pas de contenu pour remplir une catégorie ; une catégorie peut être vide (« Aucun »).
 - Ordonne du plus important au moins important dans chaque catégorie.
+- **N'émets aucun commentaire sur les métadonnées de la MR** (voir Règles générales).
 
 ## Règles générales
+- **On review le CODE, pas les métadonnées de la MR.** N'émets AUCUN commentaire dont le sujet est :
+  - un **écart entre la description de la MR et son contenu réel** (« la description dit que seule cette ligne change, mais la branche contient aussi… ») ;
+  - le **libellé, la clarté ou la portée d'un message de commit** (« le commit dit “Remove backdrop overlay” mais… ») ;
+  - le fait que des commits touchent des fichiers non mentionnés dans la description, ou le **découpage** de la MR (« sortir ces commits dans une MR séparée »).
+
+  Ces points concernent le formulaire/l'historique Git, pas le code. Ils ne doivent apparaître ni en section 3, ni en section 4. Le seul usage légitime de la description/du ticket est de comprendre le **requis fonctionnel** pour juger le code — jamais pour critiquer le texte lui-même. (Un SHA de commit n'est jamais un `fichier:ligne`.)
 - Commence DIRECTEMENT par la ligne `## 1. Ce que cette MR apporte (en simple)`. N'écris AUCUNE phrase NI séparateur (`---`) avant (pas de « voici le rapport », pas de « je rédige maintenant », pas de résumé de ton investigation).
 - Dans une review locale (avant MR), remplace mentalement « cette MR » par « ces changements ».
 - Sois CONCIS. Pas d'intro, pas de conclusion, pas de remplissage.
