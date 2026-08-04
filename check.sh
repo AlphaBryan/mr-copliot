@@ -31,6 +31,9 @@ AUTO_POST=$(jq -r '.auto_post_review // false' "$CONFIG")
 POST_DELAY_MIN=$(jq -r '.post_delay_minutes // 15' "$CONFIG")
 POST_DELAY_SECS=$((POST_DELAY_MIN * 60))
 REVIEWS_DIR=$(jq -r '.reviews_dir // ""' "$CONFIG"); [ -z "$REVIEWS_DIR" ] && REVIEWS_DIR="$DIR/reviews"
+# Santé : alerte après N passages consécutifs où les appels GitLab échouent (dead-man's switch).
+HEALTH="$DIR/health.json"
+HALERT_AFTER=$(jq -r '.health_alert_after // 3' "$CONFIG")
 
 USERS=()
 while IFS= read -r u; do [ -n "$u" ] && USERS+=("$u"); done < <(jq -r '.watch_users[]' "$CONFIG")
@@ -201,5 +204,30 @@ if [ "$FETCH_FAILED" -eq 0 ]; then
   jq -s '.' "$OPENTMP" > "$DIR/open.json" 2>/dev/null || printf '[]\n' > "$DIR/open.json"
 fi
 rm -f "$OPENTMP"
+
+# --- Santé : suivi des échecs GitLab + alerte ntfy si le bot est aveugle trop longtemps ---
+# health.json est réécrit à CHAQUE passage → sa présence/fraîcheur sert aussi de heartbeat au widget.
+cf=0; alerted=false; prev_ls=0
+if [ -f "$HEALTH" ]; then
+  cf=$(jq -r '.consecutiveFailures // 0' "$HEALTH" 2>/dev/null); [ -z "$cf" ] && cf=0
+  alerted=$(jq -r '.alerted // false' "$HEALTH" 2>/dev/null); [ "$alerted" = "true" ] || alerted=false
+  prev_ls=$(jq -r '.lastSuccess // 0' "$HEALTH" 2>/dev/null); [ -z "$prev_ls" ] && prev_ls=0
+fi
+if [ "$FETCH_FAILED" -eq 1 ]; then
+  cf=$((cf + 1))
+  if [ "$cf" -ge "$HALERT_AFTER" ] && [ "$alerted" != "true" ]; then
+    ntfy_send "mr-watch en panne" "Appels GitLab en échec depuis $cf passages (~$((cf * 15))min). Vérifier glab (token) / réseau." "" "warning,skull"
+    log "HEALTH ALERT — $cf échecs consécutifs"
+    alerted=true
+  fi
+  jq -nc --argjson cf "$cf" --argjson alerted "$alerted" --argjson ls "$prev_ls" \
+    '{consecutiveFailures:$cf, alerted:$alerted, lastSuccess:$ls}' > "$HEALTH"
+else
+  if [ "$alerted" = "true" ]; then
+    ntfy_send "mr-watch rétabli" "Les appels GitLab refonctionnent." "" "white_check_mark"
+    log "HEALTH OK — rétabli après $cf échec(s)"
+  fi
+  jq -nc --argjson now "$NOW" '{consecutiveFailures:0, alerted:false, lastSuccess:$now}' > "$HEALTH"
+fi
 
 exit 0

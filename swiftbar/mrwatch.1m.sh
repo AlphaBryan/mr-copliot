@@ -27,6 +27,26 @@ NAG_HOURS=$(jq -r '.approval_nag_hours // 2' "$CONFIG" 2>/dev/null); NAG_HOURS=$
 NAG_SECS=$((NAG_HOURS * 3600))
 now=$(date +%s)
 
+# Santé (health.json écrit par check.sh à chaque passage).
+#   health_warn = 1 si les appels GitLab échouent en série, OU si aucun passage réussi depuis >25min
+#   (heartbeat périmé = check.sh ne tourne plus). N'alerte qu'en heures actives.
+HEALTH="$DIR/health.json"
+HALERT_AFTER=$(jq -r '.health_alert_after // 3' "$CONFIG" 2>/dev/null); HALERT_AFTER=${HALERT_AFTER:-3}
+health_warn=0; health_msg=""
+if [ "$loaded" -eq 1 ] && [ "$inhours" -eq 1 ]; then
+  if [ -f "$HEALTH" ]; then
+    cf=$(jq -r '.consecutiveFailures // 0' "$HEALTH" 2>/dev/null); [ -z "$cf" ] && cf=0
+    ls=$(jq -r '.lastSuccess // 0' "$HEALTH" 2>/dev/null); [ -z "$ls" ] && ls=0
+    if [ "$cf" -ge "$HALERT_AFTER" ]; then
+      health_warn=1; health_msg="Appels GitLab en échec ($cf passages) — vérifier glab/réseau"
+    elif [ "$ls" -gt 0 ] && [ "$((now - ls))" -gt 1500 ]; then
+      health_warn=1; health_msg="Aucun passage réussi depuis $(((now - ls) / 60))min — bot bloqué ?"
+    fi
+  else
+    health_warn=1; health_msg="Jamais exécuté (health.json absent)"
+  fi
+fi
+
 # Compteurs depuis le snapshot écrit par check.sh
 #   total      = MR ouvertes non-draft
 #   unapproved = celles que JE n'ai pas encore approuvées (approved != true)
@@ -43,6 +63,8 @@ fi
 # --- Titre dans la barre de menu ---
 if [ "$loaded" -ne 1 ]; then
   echo "🔍⏹"
+elif [ "$health_warn" -eq 1 ]; then
+  echo "🔍⚠️"                                  # bot en peine : API en échec ou plus de passage récent
 elif [ "$overdue" -gt 0 ]; then
   echo "🔴 $unapproved"                       # pastille rouge : au moins une MR >${NAG_HOURS}h sans mon aval
 elif [ "$inhours" -eq 1 ]; then
@@ -53,6 +75,7 @@ fi
 echo "---"
 
 # --- Statut ---
+[ "$health_warn" -eq 1 ] && echo "⚠️ $health_msg | color=red"
 if [ "$loaded" -eq 1 ]; then echo "Bot chargé | color=green"; else echo "Bot arrêté | color=red"; fi
 if [ "$inhours" -eq 1 ]; then echo "Heures actives (${WS}h-${WE}h) | color=green"; else echo "Hors heures (${WS}h-${WE}h, lun-ven) | color=gray"; fi
 lastts=$(tail -n 1 "$DIR/logs/check.log" 2>/dev/null | cut -c1-19)

@@ -8,6 +8,7 @@
   "work_end_hour": 17,
   "work_days": [1, 2, 3, 4, 5],
   "approval_nag_hours": 2,
+  "health_alert_after": 3,
   "auto_post_review": false,
   "post_delay_minutes": 15,
   "review_model": "sonnet",
