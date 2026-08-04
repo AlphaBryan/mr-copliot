@@ -17,6 +17,10 @@ Toutes les 15 min, **uniquement 8h-17h du lundi au vendredi** (auto-désactivé 
    - **Commentaires prêts à coller** sur la MR (groupés Bugs / Améliorations / Questions, chacun avec `fichier:ligne`).
 4. **Notification cliquable** quand le rapport est prêt → ouvre le `.md` dans VS Code.
 5. **Suit mon statut d'approbation** sur chaque MR et me **relance** si j'en laisse une trop longtemps.
+6. **Auto-post (optionnel)** : ~15 min après la création d'une nouvelle MR, poste les commentaires de la
+   review directement en **inline** sur la MR.
+
+L'état est visible en continu dans un **widget SwiftBar** (barre de menu macOS) : voir plus bas.
 
 Les bots (Renovate, Snyk) sont ignorés automatiquement (pas dans la watchlist).
 
@@ -101,12 +105,38 @@ branche actuellement checkout dans `local_repo_dir`, vs `local_base_branch`, en 
 changements **non commités** (staged + working tree). Pratique pour avoir un rapport avant
 d'ouvrir la MR. Notif au lancement, puis notif cliquable quand le rapport est prêt.
 
+## Widget SwiftBar (barre de menu)
+
+`swiftbar/mrwatch.1m.sh` affiche l'état du bot dans la barre de menu macOS, rafraîchi chaque minute
+(lecture seule de fichiers locaux, aucun appel réseau). Nécessite [SwiftBar](https://github.com/swiftbar/SwiftBar).
+
+**Icône de la barre de menu :**
+
+| Icône | Sens |
+|---|---|
+| `🔴 N` | Au moins une MR non approuvée depuis > seuil (`approval_nag_hours`) ; `N` = MR restant à approuver |
+| `🔍 N` | `N` MR restent à approuver (aucune en retard) |
+| `🔍✓` | Tout est approuvé (plus de chiffre) |
+| `🔍💤` | Hors heures actives |
+| `🔍⏹` | Bot arrêté (non chargé dans launchd) |
+
+**Menu déroulant :**
+- État du bot (chargé/arrêté), heures actives, dernier passage, résumé « X à approuver · Y en retard ».
+- La liste des **MR ouvertes** avec, pour chacune : `✅` grisé (déjà approuvée), `🟡` (à approuver, avec
+  délai) ou `🔴` (en attente > seuil). Sous-menu : titre, statut, **🌐 Ouvrir la MR** (seul lien qui
+  ouvre la MR), **📄 Ouvrir le rapport**.
+- Actions : **↻ Forcer un check**, **🔎 Reviewer ma branche locale**, **📁 Dossier des rapports**,
+  **📜 Voir les logs** (dossier des logs + `check.log` / `learn.log` / dernier `post-*.log`, plus un
+  aperçu des dernières lignes de `check.log`), **↻ Rafraîchir**.
+
 ## Fichiers
 
 | Fichier | Rôle |
 |---|---|
 | `config.json` | Watchlist, heures, `approval_nag_hours` (seuil relance, défaut 2), auto-post (`auto_post_review`, `post_delay_minutes`), modèle, plafond diff, `repo_dir`, `local_repo_dir`, `learn_from_reviewers`, `learn_window_days`, `learn_model`, filtre IA (`learn_ai_filter`, `learn_exclude_authors`, `learn_ai_markers`). **À éditer ici.** |
-| `check.sh` | Détection + notif + déclenche les reviews. |
+| `config.example.json` | Template de config à copier vers `config.json` (non versionné). |
+| `check.sh` | Détection + notif + approbations + déclenche reviews + auto-post. Toutes les 15 min (launchd). |
+| `force-check.sh` | Force un passage de `check.sh` maintenant (bouton du widget). |
 | `review.sh <iid>` | Génère un rapport pour une MR (mode repo via worktree, repli diff). |
 | `review-local.sh [repo]` | Review la branche locale courante (commité + non commité). |
 | `post-review.sh <iid>` | Poste la section 4 d'un rapport en commentaires inline sur la MR (repli en note générale). `POST_DRYRUN=1` = simulation. |
@@ -116,12 +146,15 @@ d'ouvrir la MR. Notif au lancement, puis notif cliquable quand le rapport est pr
 | `prompts/learn-prompt.md` | Le prompt de distillation utilisé par `learn.sh`. |
 | `prompts/ai-filter-prompt.md` | Le prompt du classifieur humain-vs-IA (couche 2 de l'anti « IA entraîne l'IA »). |
 | `prompts/learned-style.md` | Le guide de style APPRIS (généré/maj auto, injecté dans chaque review). |
+| `swiftbar/mrwatch.1m.sh` | Widget barre de menu (SwiftBar) : état, MR + approbations, boutons (logs, check, review locale). |
 | `learn-state.tsv` | IDs des commentaires déjà appris (dédup). Supprimer = tout ré-apprendre. |
+| `state.tsv` | MR déjà vues (iid + sha). Supprimer = tout re-traiter. |
+| `open.json` | Snapshot des MR ouvertes + statut approbation/auto-post (lu par le widget). |
 | `reviews/` | Rapports générés (`ADF-XXXX-mrIID-date.md`, `LOCAL-<branche>-date.md`). |
 | `worktrees/` | Worktrees git temporaires créés/supprimés par `review.sh` (mode repo). |
-| `logs/` | Journaux (`check.log`, `review-<iid>.log`, `review-local-*.log`, `launchd.*.log`). |
-| `state.tsv` | MR déjà vues (iid + sha). Supprimer = tout re-traiter. |
+| `logs/` | Journaux : `check.log`, `learn.log`, `review-<iid>.log`, `review-local-*.log`, `post-<iid>.log`, `launchd.*.log`. |
 | `install.sh` / `uninstall.sh` | Charger / décharger le bot dans launchd. |
+| `com.bryan.mevo.mrwatch*.plist` | Agents launchd : `check.sh` (15 min) + `learn.sh` (8h05 / 13h05). |
 | `status.sh` | État du bot, MR suivies, derniers logs et rapports. |
 
 ## Commandes
@@ -154,4 +187,9 @@ MRWATCH_SKIP_FETCH=1 bash review.sh 3806   # re-run sans refetch (refs déjà lo
   refs locales, et si le worktree ne peut pas se créer, repli sur le mode diff.
 - **Mode diff (repli)** : le diff envoyé à `claude` est plafonné (`max_diff_lines`, défaut 2500) ;
   au-delà, la review est partielle et le rapport le signale.
+- **Portée de la review** : le prompt (`prompts/review-prompt.md`) review le **code**, pas les
+  métadonnées de la MR — pas de commentaire sur l'écart description ↔ commits, les messages de commit
+  ou le découpage. Un `fichier:ligne` est toujours un vrai numéro de ligne (jamais un SHA).
+- **Auto-post** : action publique sous ton compte GitLab. Pour couper, mettre `auto_post_review` à
+  `false` dans `config.json`. Pour un test contrôlé, `POST_DRYRUN=1 bash post-review.sh <iid>`.
 - À la 1re notification, macOS demandera l'autorisation pour `terminal-notifier` (accepter une fois).
