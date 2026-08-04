@@ -185,7 +185,7 @@ if [ -f "$GSUMMARY" ]; then
   n_g=$(printf '%s' "$agg" | cut -f1); g_hp=$(printf '%s' "$agg" | cut -f2)
   g_c=$(printf '%s' "$agg" | cut -f3); g_m=$(printf '%s' "$agg" | cut -f4)
   g_e=$(printf '%s' "$agg" | cut -f5); g_pct=$(printf '%s' "$agg" | cut -f6)
-  echo "📊 Voir les notes ($g_c/$g_hp · ${g_pct}%)"
+  echo "📊 Qualité review (auto-éval) — $g_c/$g_hp · ${g_pct}%"
   echo "-- Attrapé $g_c/$g_hp points humains (${g_pct}%) sur $n_g MR · $g_m manqués · $g_e en plus | size=11 color=gray"
   echo "-- 📁 Dossier des notes | bash=/usr/bin/open param1=$GRADESDIR terminal=false"
   echo "-----"
@@ -197,7 +197,7 @@ if [ -f "$GSUMMARY" ]; then
     echo "-- !$giid : $cc/$hpp attrapés | bash=/usr/bin/open param1=-a param2=\"$APP\" param3=$gf terminal=false"
   done
 else
-  echo "📊 Voir les notes"
+  echo "📊 Qualité review (auto-éval)"
   echo "-- (aucune note encore — activer auto_grade_reviews) | color=gray"
 fi
 
