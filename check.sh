@@ -25,6 +25,10 @@ WS=$(jq -r '.work_start_hour' "$CONFIG")
 WE=$(jq -r '.work_end_hour' "$CONFIG")
 NAG_HOURS=$(jq -r '.approval_nag_hours // 2' "$CONFIG")
 NAG_SECS=$((NAG_HOURS * 3600))
+# Quand je suis le DERNIER approbateur requis : relance répétée toutes les N minutes (défaut 15),
+# tant que je ne l'ai pas approuvée — au lieu d'une seule notif.
+LAST_REPEAT_MIN=$(jq -r '.last_approver_repeat_minutes // 15' "$CONFIG")
+LAST_REPEAT_SECS=$((LAST_REPEAT_MIN * 60))
 # Auto-post de la review (inline) ~post_delay_minutes après la création de la MR.
 # Valeurs possibles de auto_post_review : false (défaut, off) | true (poste réel) | "dryrun" (journalise sans envoyer).
 AUTO_POST=$(jq -r '.auto_post_review // false' "$CONFIG")
@@ -151,25 +155,32 @@ for u in "${USERS[@]}"; do
     [ "$approved" != "true" ] && [ "$approvals_left" = "1" ] && last_approver=true
 
     if [ "$approved" = "true" ]; then
-      first_seen=""; notified2h=false; notified_last=false
+      first_seen=""; notified2h=false; last_notif_at=0
     else
       first_seen=$(prev_field "$iid" firstSeen); [ -z "$first_seen" ] && first_seen=$NOW
       notified2h=$(prev_field "$iid" notified2h); [ "$notified2h" = "true" ] || notified2h=false
-      notified_last=$(prev_field "$iid" notifiedLast); [ "$notified_last" = "true" ] || notified_last=false
+      last_notif_at=$(prev_field "$iid" lastApproverNotifiedAt); [ -z "$last_notif_at" ] && last_notif_at=0
       age=$((NOW - first_seen))
-      # Priorité au signal « tu es le dernier » : notif IMMÉDIATE (sans attendre le seuil de 2h), 1 fois.
-      if [ "$SEED" -ne 1 ] && [ "$INHOURS" -eq 1 ] && [ "$last_approver" = "true" ] && [ "$notified_last" != "true" ]; then
-        terminal-notifier -title "🎯 Dernier à approuver ($author)" -subtitle "!$iid n'attend que TON aval" -message "$title" -open "$url" -group "mrwatch-last-$iid" 2>>"$LOG"
-        ntfy_send "🎯 Dernier à approuver: $author" "!$iid $title — ton approbation débloque le merge" "$url" "dart"
-        notified_last=true
-        log "NAG-LAST !$iid $author (approvals_left=1)"
-      # Sinon, relance temporelle classique après le seuil.
-      elif [ "$SEED" -ne 1 ] && [ "$INHOURS" -eq 1 ] && [ "$age" -ge "$NAG_SECS" ] && [ "$notified2h" != "true" ]; then
-        h=$((age / 3600)); m=$(((age % 3600) / 60))
-        terminal-notifier -title "À approuver ($author)" -subtitle "!$iid en attente >${NAG_HOURS}h" -message "$title" -open "$url" -group "mrwatch-nag-$iid" 2>>"$LOG"
-        ntfy_send "À approuver: $author" "!$iid $title (en attente ${h}h${m}m)" "$url" "hourglass"
-        notified2h=true
-        log "NAG !$iid $author age=${age}s"
+      if [ "$last_approver" = "true" ]; then
+        # « Tu es le dernier » : relance RÉPÉTÉE toutes les LAST_REPEAT_MIN min (immédiate la 1re fois),
+        # tant que la MR n'est pas approuvée.
+        if [ "$SEED" -ne 1 ] && [ "$INHOURS" -eq 1 ] \
+           && { [ "$last_notif_at" -eq 0 ] || [ "$((NOW - last_notif_at))" -ge "$LAST_REPEAT_SECS" ]; }; then
+          terminal-notifier -title "🎯 Dernier à approuver ($author)" -subtitle "!$iid n'attend que TON aval" -message "$title" -open "$url" -group "mrwatch-last-$iid" 2>>"$LOG"
+          ntfy_send "🎯 Dernier à approuver: $author" "!$iid $title — ton approbation débloque le merge" "$url" "dart"
+          last_notif_at=$NOW
+          log "NAG-LAST !$iid $author (approvals_left=1, relance ${LAST_REPEAT_MIN}min)"
+        fi
+      else
+        last_notif_at=0   # plus (ou pas) dernier approbateur -> on réarme la relance immédiate
+        # Relance temporelle classique après le seuil (une seule fois).
+        if [ "$SEED" -ne 1 ] && [ "$INHOURS" -eq 1 ] && [ "$age" -ge "$NAG_SECS" ] && [ "$notified2h" != "true" ]; then
+          h=$((age / 3600)); m=$(((age % 3600) / 60))
+          terminal-notifier -title "À approuver ($author)" -subtitle "!$iid en attente >${NAG_HOURS}h" -message "$title" -open "$url" -group "mrwatch-nag-$iid" 2>>"$LOG"
+          ntfy_send "À approuver: $author" "!$iid $title (en attente ${h}h${m}m)" "$url" "hourglass"
+          notified2h=true
+          log "NAG !$iid $author age=${age}s"
+        fi
       fi
     fi
 
@@ -231,12 +242,12 @@ for u in "${USERS[@]}"; do
     jq -nc --arg iid "$iid" --arg author "$author" --arg title "$title" --arg url "$url" \
       --argjson approved "$approved" --arg firstSeen "$first_seen" --argjson notified2h "$notified2h" \
       --argjson postEligible "$post_eligible" --argjson reviewPosted "$review_posted" \
-      --argjson approvalsLeft "$approvals_left" --argjson notifiedLast "$notified_last" \
+      --argjson approvalsLeft "$approvals_left" --argjson lastApproverNotifiedAt "$last_notif_at" \
       --argjson trivial "$trivial" \
       '{iid:$iid, author:$author, title:$title, url:$url, approved:$approved,
         firstSeen:(if $firstSeen=="" then null else ($firstSeen|tonumber) end), notified2h:$notified2h,
         postEligible:$postEligible, reviewPosted:$reviewPosted,
-        approvalsLeft:$approvalsLeft, notifiedLast:$notifiedLast, trivial:$trivial}' >> "$OPENTMP"
+        approvalsLeft:$approvalsLeft, lastApproverNotifiedAt:$lastApproverNotifiedAt, trivial:$trivial}' >> "$OPENTMP"
   done
 done
 

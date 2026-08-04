@@ -8,6 +8,7 @@
   "work_end_hour": 17,
   "work_days": [1, 2, 3, 4, 5],
   "approval_nag_hours": 2,
+  "last_approver_repeat_minutes": 15,
   "health_alert_after": 3,
   "skip_trivial_reviews": true,
   "trivial_max_files": 3,

@@ -39,8 +39,9 @@ je l'ai déjà approuvée (`user_has_approved`) et l'inscrit dans `open.json` (`
   mon approbation, j'en suis notifié **une seule fois** (dédup via `notified2h`, uniquement en heures
   actives). Le compteur part du 1er passage où la MR m'est montrée sans mon aval.
 - **🎯 Dernier approbateur** : si `approvals_left == 1` et que ce n'est pas mon aval, la MR n'attend
-  plus que **moi** → notification **immédiate** (sans attendre le seuil de 2h), une seule fois (dédup
-  `notifiedLast`). C'est le signal le plus actionnable : mon clic débloque le merge.
+  plus que **moi**. Notification **immédiate** (sans attendre le seuil de 2h) puis **relance répétée
+  toutes les `last_approver_repeat_minutes` (défaut 15 min)** tant que je ne l'ai pas approuvée. C'est
+  le signal le plus actionnable : mon clic débloque le merge, donc on insiste jusqu'à l'approbation.
 - **Barre de menu** : `🎯 N` si je suis le dernier approbateur requis ; sinon `🔴 N` (pastille rouge)
   dès qu'une MR dépasse le seuil sans mon aval ; sinon `🔍 N` = MR **restant à approuver** ; `🔍✓`
   quand j'ai tout approuvé.
@@ -178,7 +179,7 @@ Priorité d'affichage : santé `⚠️` > dernier approbateur `🎯` > en retard
 
 | Fichier | Rôle |
 |---|---|
-| `config.json` | Watchlist, heures, `approval_nag_hours`, auto-post (`auto_post_review`, `post_delay_minutes`), santé (`health_alert_after`), skip trivial (`skip_trivial_reviews`, `trivial_max_files`, `trivial_file_patterns`), auto-éval (`auto_grade_reviews`), modèle, plafond diff, `repo_dir`, `local_repo_dir`, filtre IA (`learn_ai_filter`, `learn_exclude_authors`, `learn_ai_markers`). **À éditer ici.** |
+| `config.json` | Watchlist, heures, `approval_nag_hours`, `last_approver_repeat_minutes` (relance dernier approbateur, défaut 15), auto-post (`auto_post_review`, `post_delay_minutes`), santé (`health_alert_after`), skip trivial (`skip_trivial_reviews`, `trivial_max_files`, `trivial_file_patterns`), auto-éval (`auto_grade_reviews`), modèle, plafond diff, `repo_dir`, `local_repo_dir`, filtre IA (`learn_ai_filter`, `learn_exclude_authors`, `learn_ai_markers`). **À éditer ici.** |
 | `config.example.json` | Template de config à copier vers `config.json` (non versionné). |
 | `check.sh` | Détection + notif + approbations + reviews + auto-post + skip trivial + santé + auto-éval. Toutes les 15 min (launchd). |
 | `force-check.sh` | Force un passage de `check.sh` maintenant (bouton du widget). |
