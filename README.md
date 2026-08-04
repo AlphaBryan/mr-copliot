@@ -16,9 +16,15 @@ Toutes les 15 min, **uniquement 8h-17h du lundi au vendredi** (auto-désactivé 
    - Bugs / incohérences C# ou TS, classés par gravité.
    - **Commentaires prêts à coller** sur la MR (groupés Bugs / Améliorations / Questions, chacun avec `fichier:ligne`).
 4. **Notification cliquable** quand le rapport est prêt → ouvre le `.md` dans VS Code.
-5. **Suit mon statut d'approbation** sur chaque MR et me **relance** si j'en laisse une trop longtemps.
+5. **Suit mon statut d'approbation** sur chaque MR et me **relance** si j'en laisse une trop longtemps
+   (relance immédiate si je suis le **dernier approbateur** requis).
 6. **Auto-post (optionnel)** : ~15 min après la création d'une nouvelle MR, poste les commentaires de la
    review directement en **inline** sur la MR.
+7. **Saute les MR triviales** (bumps de dépendances) : pas de review ni d'auto-post, juste la notif.
+8. **Auto-évaluation (optionnel)** : après merge d'une MR reviewée, compare ma review aux commentaires
+   humains réels et produit un score « attrapé / manqué ».
+9. **Alerte de santé** : me prévient (ntfy + widget) si les appels GitLab échouent en série ou si le bot
+   ne tourne plus — un watcher silencieusement cassé est pire que pas de watcher.
 
 L'état est visible en continu dans un **widget SwiftBar** (barre de menu macOS) : voir plus bas.
 
@@ -32,10 +38,14 @@ je l'ai déjà approuvée (`user_has_approved`) et l'inscrit dans `open.json` (`
 - **Relance ntfy + macOS** : si une MR reste **plus de `approval_nag_hours` heures (défaut 2)** sans
   mon approbation, j'en suis notifié **une seule fois** (dédup via `notified2h`, uniquement en heures
   actives). Le compteur part du 1er passage où la MR m'est montrée sans mon aval.
-- **Barre de menu** : `🔴 N` (pastille rouge) dès qu'une MR dépasse le seuil sans mon aval ; sinon
-  `🔍 N` = nombre de MR **restant à approuver** ; `🔍✓` quand j'ai tout approuvé (plus de chiffre).
-- **Menu déroulant** : `✅` grisé = déjà approuvée ; `🟡` = à approuver (< seuil, avec délai) ;
-  `🔴` rouge = en attente au-delà du seuil (avec le temps écoulé).
+- **🎯 Dernier approbateur** : si `approvals_left == 1` et que ce n'est pas mon aval, la MR n'attend
+  plus que **moi** → notification **immédiate** (sans attendre le seuil de 2h), une seule fois (dédup
+  `notifiedLast`). C'est le signal le plus actionnable : mon clic débloque le merge.
+- **Barre de menu** : `🎯 N` si je suis le dernier approbateur requis ; sinon `🔴 N` (pastille rouge)
+  dès qu'une MR dépasse le seuil sans mon aval ; sinon `🔍 N` = MR **restant à approuver** ; `🔍✓`
+  quand j'ai tout approuvé.
+- **Menu déroulant** : `✅` grisé = déjà approuvée ; `🎯` orange = tu es le dernier ; `🟡` = à approuver
+  (< seuil) ; `🔴` rouge = en attente au-delà du seuil (avec le temps écoulé).
 
 ### Auto-post de la review sur la MR (inline)
 
@@ -57,6 +67,35 @@ Réglages `config.json` : `auto_post_review` = `false` (off, défaut) | `true` (
 
 Test manuel sur une MR précise : `bash post-review.sh <iid>` (poste réel) ou
 `POST_DRYRUN=1 bash post-review.sh <iid>` (simulation).
+
+### Saut des MR triviales (bumps de dépendances)
+
+Quand `skip_trivial_reviews` est actif (défaut), `check.sh` regarde le diff d'une **nouvelle** MR :
+si elle ne touche QUE des **manifestes de dépendances** (`trivial_file_patterns` : `Directory.Packages.props`,
+`*.csproj`, `*.props`, `package.json`, lockfiles) et ≤ `trivial_max_files` (défaut 3) fichiers, la review
+`claude` (et l'auto-post) sont **sautés** — inutile d'analyser un simple bump de version. La MR est quand
+même notifiée et visible dans le widget (marquée `🔧 Bump de dépendance — review sautée`). Au moindre
+doute (fichier de code présent, trop de fichiers, API KO), la review a lieu normalement.
+
+### Auto-évaluation vs les reviewers (score attrapé / manqué)
+
+Quand `auto_grade_reviews` est actif, dès qu'une MR que j'avais reviewée **passe en `merged`**, `check.sh`
+lance `grade-review.sh <iid>` : `claude` compare **mes constats** (section 4 du rapport) aux **commentaires
+des vrais reviewers humains** (API `discussions`, hors auteur + bots) et répond en JSON : combien de points
+humains ma review a **attrapés**, combien **manqués** (avec la liste), et combien de constats **en plus**.
+
+- Une note lisible est écrite dans `grades/mr<iid>-<date>.md`, et une ligne est ajoutée à
+  `grades/summary.tsv` (`date, iid, humainsPoints, attrapés, manqués, extra`) pour suivre la tendance.
+- Détection du merge : une MR présente au passage précédent et absente ensuite (confirmée `merged`),
+  notée **une fois** (`graded-state.tsv`).
+- Manuel : `bash grade-review.sh <iid>`.
+
+### Alerte de santé (dead-man's switch)
+
+`check.sh` écrit `health.json` à **chaque** passage (heartbeat). Si les appels GitLab échouent
+**`health_alert_after` passages consécutifs** (défaut 3 ≈ 45 min), une **alerte ntfy** est envoyée (une
+fois), puis une notif de **rétablissement** au retour. Le **widget** passe en `🔍⚠️` (avec le détail) quand
+l'API échoue en série **ou** qu'aucun passage réussi n'a eu lieu depuis > 25 min (bot bloqué / arrêté).
 
 ### Auto-apprentissage du style des reviewers
 
@@ -114,17 +153,22 @@ d'ouvrir la MR. Notif au lancement, puis notif cliquable quand le rapport est pr
 
 | Icône | Sens |
 |---|---|
+| `🔍⚠️` | **Alerte de santé** : appels GitLab en échec en série, ou aucun passage réussi récent (bot bloqué) |
+| `🎯 N` | Je suis le **dernier approbateur** requis sur `N` MR (mon aval débloque le merge) |
 | `🔴 N` | Au moins une MR non approuvée depuis > seuil (`approval_nag_hours`) ; `N` = MR restant à approuver |
 | `🔍 N` | `N` MR restent à approuver (aucune en retard) |
 | `🔍✓` | Tout est approuvé (plus de chiffre) |
 | `🔍💤` | Hors heures actives |
 | `🔍⏹` | Bot arrêté (non chargé dans launchd) |
 
+Priorité d'affichage : santé `⚠️` > dernier approbateur `🎯` > en retard `🔴` > compte `🔍`.
+
 **Menu déroulant :**
-- État du bot (chargé/arrêté), heures actives, dernier passage, résumé « X à approuver · Y en retard ».
-- La liste des **MR ouvertes** avec, pour chacune : `✅` grisé (déjà approuvée), `🟡` (à approuver, avec
-  délai) ou `🔴` (en attente > seuil). Sous-menu : titre, statut, **🌐 Ouvrir la MR** (seul lien qui
-  ouvre la MR), **📄 Ouvrir le rapport**.
+- État du bot (chargé/arrêté + `⚠️` si souci de santé), heures actives, dernier passage, résumé
+  « X à approuver · Y en retard · 🎯 Z dont tu es le dernier ».
+- La liste des **MR ouvertes** avec, pour chacune : `✅` grisé (approuvée), `🎯` orange (tu es le dernier),
+  `🟡` (à approuver), `🔴` (en attente > seuil). Sous-menu : titre, statut, **🌐 Ouvrir la MR** (seul lien
+  qui ouvre la MR), **📄 Ouvrir le rapport** (ou `🔧 Bump — review sautée` pour une MR triviale).
 - Actions : **↻ Forcer un check**, **🔎 Reviewer ma branche locale**, **📁 Dossier des rapports**,
   **📜 Voir les logs** (dossier des logs + `check.log` / `learn.log` / dernier `post-*.log`, plus un
   aperçu des dernières lignes de `check.log`), **↻ Rafraîchir**.
@@ -133,24 +177,29 @@ d'ouvrir la MR. Notif au lancement, puis notif cliquable quand le rapport est pr
 
 | Fichier | Rôle |
 |---|---|
-| `config.json` | Watchlist, heures, `approval_nag_hours` (seuil relance, défaut 2), auto-post (`auto_post_review`, `post_delay_minutes`), modèle, plafond diff, `repo_dir`, `local_repo_dir`, `learn_from_reviewers`, `learn_window_days`, `learn_model`, filtre IA (`learn_ai_filter`, `learn_exclude_authors`, `learn_ai_markers`). **À éditer ici.** |
+| `config.json` | Watchlist, heures, `approval_nag_hours`, auto-post (`auto_post_review`, `post_delay_minutes`), santé (`health_alert_after`), skip trivial (`skip_trivial_reviews`, `trivial_max_files`, `trivial_file_patterns`), auto-éval (`auto_grade_reviews`), modèle, plafond diff, `repo_dir`, `local_repo_dir`, filtre IA (`learn_ai_filter`, `learn_exclude_authors`, `learn_ai_markers`). **À éditer ici.** |
 | `config.example.json` | Template de config à copier vers `config.json` (non versionné). |
-| `check.sh` | Détection + notif + approbations + déclenche reviews + auto-post. Toutes les 15 min (launchd). |
+| `check.sh` | Détection + notif + approbations + reviews + auto-post + skip trivial + santé + auto-éval. Toutes les 15 min (launchd). |
 | `force-check.sh` | Force un passage de `check.sh` maintenant (bouton du widget). |
 | `review.sh <iid>` | Génère un rapport pour une MR (mode repo via worktree, repli diff). |
 | `review-local.sh [repo]` | Review la branche locale courante (commité + non commité). |
 | `post-review.sh <iid>` | Poste la section 4 d'un rapport en commentaires inline sur la MR (repli en note générale). `POST_DRYRUN=1` = simulation. |
+| `grade-review.sh <iid>` | Auto-évaluation : compare ma review aux commentaires humains → `grades/`. |
 | `review-local-launch.sh` | Lance `review-local.sh` détaché (utilisé par le bouton du widget). |
 | `learn.sh` | Apprend le style des reviewers seniors → met à jour `prompts/learned-style.md`. 2x/jour (8h05, 13h05). |
 | `prompts/review-prompt.md` | Le prompt de review (modifiable pour ajouter des critères). |
 | `prompts/learn-prompt.md` | Le prompt de distillation utilisé par `learn.sh`. |
 | `prompts/ai-filter-prompt.md` | Le prompt du classifieur humain-vs-IA (couche 2 de l'anti « IA entraîne l'IA »). |
+| `prompts/grade-prompt.md` | Le prompt d'auto-évaluation (ma review vs les commentaires humains). |
 | `prompts/learned-style.md` | Le guide de style APPRIS (généré/maj auto, injecté dans chaque review). |
 | `swiftbar/mrwatch.1m.sh` | Widget barre de menu (SwiftBar) : état, MR + approbations, boutons (logs, check, review locale). |
 | `learn-state.tsv` | IDs des commentaires déjà appris (dédup). Supprimer = tout ré-apprendre. |
 | `state.tsv` | MR déjà vues (iid + sha). Supprimer = tout re-traiter. |
-| `open.json` | Snapshot des MR ouvertes + statut approbation/auto-post (lu par le widget). |
+| `open.json` | Snapshot des MR ouvertes + statut approbation / auto-post / trivial (lu par le widget). |
+| `health.json` | Heartbeat + compteur d'échecs GitLab (alerte de santé). |
+| `graded-state.tsv` | iids de MR déjà auto-évaluées (dédup). |
 | `reviews/` | Rapports générés (`ADF-XXXX-mrIID-date.md`, `LOCAL-<branche>-date.md`). |
+| `grades/` | Notes d'auto-évaluation (`mr<iid>-date.md`) + `summary.tsv` (tendance). |
 | `worktrees/` | Worktrees git temporaires créés/supprimés par `review.sh` (mode repo). |
 | `logs/` | Journaux : `check.log`, `learn.log`, `review-<iid>.log`, `review-local-*.log`, `post-<iid>.log`, `launchd.*.log`. |
 | `install.sh` / `uninstall.sh` | Charger / décharger le bot dans launchd. |
@@ -168,6 +217,8 @@ bash check.sh --seed       # marque les MR ACTUELLES comme vues SANS les reviewe
 MRWATCH_FORCE=1 bash check.sh   # forcer un passage maintenant (ignore le filtre horaire)
 bash review.sh 3806        # (re)générer le rapport d'une MR précise à la main
 bash review-local.sh       # reviewer la branche locale courante (repo de dev configuré)
+bash post-review.sh 3806   # poster la review d'une MR en inline (POST_DRYRUN=1 = simulation)
+bash grade-review.sh 3806  # auto-évaluer une review vs les commentaires humains
 bash learn.sh              # apprendre le style des reviewers maintenant (nouveaux commentaires)
 MRWATCH_LEARN_RESET=1 bash learn.sh   # tout ré-apprendre depuis zéro
 MRWATCH_SKIP_FETCH=1 bash review.sh 3806   # re-run sans refetch (refs déjà locaux)
