@@ -143,6 +143,8 @@ posted=0; fell=0
 
 while IFS="$(printf '\t')" read -r cat tok text; do
   [ -z "$tok" ] && continue
+  # On retire les backticks : sinon GitLab rend les identifiants (`ProfileCode`…) en `code` — non voulu.
+  text=$(printf '%s' "$text" | tr -d '`')
   path="${tok%:*}"; lineitem="${tok##*:}"
   # Le rapport peut citer un NOM COURT (mode diff) ; on résout vers le new_path complet du diff
   # (si non ambigu) pour permettre l'ancrage inline. Ambigu / introuvable -> on garde tel quel.
@@ -173,8 +175,8 @@ while IFS="$(printf '\t')" read -r cat tok text; do
   fi
   if [ "$ok" -eq 0 ]; then
     # Non ancrable inline (ligne absente du diff) : commentaire INDIVIDUEL, sans texte parasite,
-    # préfixé du `fichier:ligne` pour rester lié au code concerné.
-    post_note "\`$tok\` — $text" && fell=$((fell+1))
+    # préfixé du fichier:ligne (en clair, sans backticks) pour rester lié au code concerné.
+    post_note "$tok — $text" && fell=$((fell+1))
   fi
 done < "$ITEMS"
 
