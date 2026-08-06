@@ -172,7 +172,7 @@ d'ouvrir la MR. Notif au lancement, puis notif cliquable quand le rapport est pr
 
 | Icône | Sens |
 |---|---|
-| `🔍⚠️` | **Alerte de santé** : appels GitLab en échec en série, ou aucun passage réussi récent (bot bloqué) |
+| `🔍⚠️` | **Alerte de santé** (en langage clair) : « le bot n'arrive pas à joindre GitLab », ou « n'a pas vérifié les MR depuis X min » — avec l'explication (souvent : Mac en veille) et un bouton **🔄 Relancer le bot** |
 | `🎯 N` | Je suis le **dernier approbateur** requis sur `N` MR (mon aval débloque le merge) |
 | `🔴 N` | Au moins une MR non approuvée depuis > seuil (`approval_nag_hours`) ; `N` = MR restant à approuver |
 | `🔍 N` | `N` MR restent à approuver (aucune en retard) |

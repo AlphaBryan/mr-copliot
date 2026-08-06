@@ -35,18 +35,24 @@ now=$(date +%s)
 #   (heartbeat périmé = check.sh ne tourne plus). N'alerte qu'en heures actives.
 HEALTH="$DIR/health.json"
 HALERT_AFTER=$(jq -r '.health_alert_after // 3' "$CONFIG" 2>/dev/null); HALERT_AFTER=${HALERT_AFTER:-3}
-health_warn=0; health_msg=""
+health_warn=0; health_msg=""; health_hint=""
 if [ "$loaded" -eq 1 ] && [ "$inhours" -eq 1 ] && [ "$paused" -ne 1 ]; then
   if [ -f "$HEALTH" ]; then
     cf=$(jq -r '.consecutiveFailures // 0' "$HEALTH" 2>/dev/null); [ -z "$cf" ] && cf=0
     ls=$(jq -r '.lastSuccess // 0' "$HEALTH" 2>/dev/null); [ -z "$ls" ] && ls=0
     if [ "$cf" -ge "$HALERT_AFTER" ]; then
-      health_warn=1; health_msg="Appels GitLab en échec ($cf passages) — vérifier glab/réseau"
+      health_warn=1
+      health_msg="Le bot n'arrive pas à joindre GitLab"
+      health_hint="Vérifie ta connexion internet / le VPN. Si ça dure, reconnecte glab : bash reconnect (glab auth login)."
     elif [ "$ls" -gt 0 ] && [ "$((now - ls))" -gt 2100 ]; then
-      health_warn=1; health_msg="Aucun passage réussi depuis $(((now - ls) / 60))min — bot bloqué ?"
+      health_warn=1
+      health_msg="Le bot n'a pas vérifié les MR depuis $(((now - ls) / 60)) min"
+      health_hint="Souvent le Mac était en veille — ça repart tout seul au réveil. Si ça persiste, clique « Forcer un check » ou « Relancer le bot »."
     fi
   else
-    health_warn=1; health_msg="Jamais exécuté (health.json absent)"
+    health_warn=1
+    health_msg="Le bot n'a encore jamais tourné"
+    health_hint="Clique « Forcer un check » ci-dessous, ou lance une fois : bash install.sh."
   fi
 fi
 
@@ -92,7 +98,11 @@ echo "${mb}${rev_badge}"
 echo "---"
 
 # --- Statut ---
-[ "$health_warn" -eq 1 ] && echo "⚠️ $health_msg | color=red"
+if [ "$health_warn" -eq 1 ]; then
+  echo "⚠️ $health_msg | color=red"
+  echo "$health_hint | size=11 color=gray"
+  echo "🔄 Relancer le bot | bash=/bin/bash param1=$DIR/install.sh terminal=false refresh=true"
+fi
 [ "$paused" -eq 1 ] && echo "⏸ En pause (ne review ni ne poste rien) | color=orange"
 if [ "$loaded" -eq 1 ]; then echo "Bot chargé | color=green"; else echo "Bot arrêté | color=red"; fi
 if [ "$inhours" -eq 1 ]; then echo "Heures actives (${WS}h-${WE}h) | color=green"; else echo "Hors heures (${WS}h-${WE}h, lun-ven) | color=gray"; fi
