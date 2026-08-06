@@ -83,7 +83,7 @@ juge **triviale** dans deux cas :
 Pour une MR triviale, la review `claude` **et** l'auto-post sont **sautés** (rien de substantiel à
 analyser/commenter). À la place, le bot me **relance toutes les `trivial_reminder_minutes` (défaut 15)**
 avec « 🔎 À reviewer toi-même » jusqu'à ce que je l'approuve. La MR est visible dans le widget (marquée
-`🔧 Review sautée (bump / petit changement)`). Au moindre doute (fichier de code volumineux, trop de
+`🔧 Pas de review auto — à reviewer toi-même`). Au moindre doute (fichier de code volumineux, trop de
 fichiers, API KO), la review a lieu normalement.
 
 Priorité des relances sur une MR non approuvée : **🎯 dernier approbateur** > **🔎 triviale à reviewer** >
@@ -187,7 +187,7 @@ Priorité d'affichage : santé `⚠️` > dernier approbateur `🎯` > en retard
   « X à approuver · Y en retard · 🎯 Z dont tu es le dernier ».
 - La liste des **MR ouvertes** avec, pour chacune : `✅` grisé (approuvée), `🎯` orange (tu es le dernier),
   `🟡` (à approuver), `🔴` (en attente > seuil). Sous-menu : titre, statut, **🌐 Ouvrir la MR** (seul lien
-  qui ouvre la MR), **📄 Ouvrir le rapport** (ou `🔧 Bump — review sautée` pour une MR triviale).
+  qui ouvre la MR), **📄 Ouvrir le rapport** (ou `🔧 Pas de review auto` pour une MR triviale / non auto-reviewée).
 - Actions : **↻ Forcer un check**, **🔎 Reviewer ma branche locale**, **📁 Dossier des rapports**,
   **📜 Voir les logs** (dossier des logs + `check.log` / `learn.log` / dernier `post-*.log`, plus un
   aperçu des dernières lignes de `check.log`), **📊 Qualité review (auto-éval)** (tendance : attrapé/total
