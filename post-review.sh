@@ -68,14 +68,20 @@ awk '
   /^## 4\./ { insec=1; next }
   insec && /^## / { insec=0 }
   !insec { next }
-  /^\*\*.*\*\*[ \t]*$/ { cat=$0; gsub(/\*/,"",cat); gsub(/[ \t]+$/,"",cat); next }
+  # En-tête de catégorie : ligne NON-puce terminée par **…** (avec ou sans emoji devant,
+  # ex. "🐞 **Bugs / risques**" ou "**Bugs**"). On retient un libellé court, jamais vide.
+  !/^- / && /\*\*[^*]+\*\*[[:space:]]*$/ {
+    cat=$0; gsub(/\*/,"",cat); gsub(/^[[:space:]]+|[[:space:]]+$/,"",cat); next
+  }
   /^- \*\*`/ {
     s=index($0,"`"); rest=substr($0,s+1)
     e=index(rest,"`"); tok=substr(rest,1,e-1)
     after=substr(rest,e+1)
     sub(/^\*\*[ \t]*/,"",after)          # enlève "**" et espaces
-    sub(/^[^[:alnum:]`([]+/,"",after)    # enlève le tiret cadratin + espaces avant le texte
-    if (tok!="" && after!="") print cat "\t" tok "\t" after
+    sub(/^[^[:alnum:]`([]+/,"",after)    # enlève le séparateur (: ou —) + espaces avant le texte
+    # cat NON vide obligatoire : une ligne ITEMS avec 1er champ vide ferait décaler read (IFS=tab).
+    c = (cat == "" ? "Review" : cat)
+    if (tok != "" && after != "") print c "\t" tok "\t" after
   }
 ' "$REPORT" > "$ITEMS"
 
