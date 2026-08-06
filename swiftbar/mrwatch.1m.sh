@@ -62,20 +62,28 @@ if [ -f "$OPENJSON" ]; then
   lastapprover=$(jq '[.[] | select(.approved != true and .approvalsLeft == 1)] | length' "$OPENJSON" 2>/dev/null); [ -z "$lastapprover" ] && lastapprover=0
 fi
 
+# Reviews en cours (process review.sh <iid> lancés par check.sh). Lecture locale via pgrep.
+reviewing_iids=$(pgrep -fl 'review\.sh [0-9]' 2>/dev/null | grep -oE 'review\.sh [0-9]+' | awk '{print $2}' | sort -u)
+n_reviewing=$(printf '%s' "$reviewing_iids" | grep -c . 2>/dev/null); [ -z "$n_reviewing" ] && n_reviewing=0
+local_reviewing=0; pgrep -f 'review-local\.sh' >/dev/null 2>&1 && local_reviewing=1
+
 # --- Titre dans la barre de menu ---
+# Badge ⏳ ajouté quand une review (MR ou branche locale) tourne, quel que soit l'état principal.
+rev_badge=""; { [ "$n_reviewing" -gt 0 ] || [ "$local_reviewing" -eq 1 ]; } && rev_badge=" ⏳"
 if [ "$loaded" -ne 1 ]; then
-  echo "🔍⏹"
+  mb="🔍⏹"
 elif [ "$health_warn" -eq 1 ]; then
-  echo "🔍⚠️"                                  # bot en peine : API en échec ou plus de passage récent
+  mb="🔍⚠️"                                    # bot en peine : API en échec ou plus de passage récent
 elif [ "$lastapprover" -gt 0 ]; then
-  echo "🎯 $lastapprover"                      # tu es le dernier approbateur requis : ton aval débloque le merge
+  mb="🎯 $lastapprover"                        # tu es le dernier approbateur requis : ton aval débloque le merge
 elif [ "$overdue" -gt 0 ]; then
-  echo "🔴 $unapproved"                       # pastille rouge : au moins une MR >${NAG_HOURS}h sans mon aval
+  mb="🔴 $unapproved"                         # pastille rouge : au moins une MR >${NAG_HOURS}h sans mon aval
 elif [ "$inhours" -eq 1 ]; then
-  if [ "$unapproved" -gt 0 ]; then echo "🔍 $unapproved"; else echo "🔍✓"; fi
+  if [ "$unapproved" -gt 0 ]; then mb="🔍 $unapproved"; else mb="🔍✓"; fi
 else
-  echo "🔍💤"
+  mb="🔍💤"
 fi
+echo "${mb}${rev_badge}"
 echo "---"
 
 # --- Statut ---
@@ -84,6 +92,10 @@ if [ "$loaded" -eq 1 ]; then echo "Bot chargé | color=green"; else echo "Bot ar
 if [ "$inhours" -eq 1 ]; then echo "Heures actives (${WS}h-${WE}h) | color=green"; else echo "Hors heures (${WS}h-${WE}h, lun-ven) | color=gray"; fi
 lastts=$(tail -n 1 "$DIR/logs/check.log" 2>/dev/null | cut -c1-19)
 [ -n "$lastts" ] && echo "Dernier passage: $lastts | size=11 color=gray"
+if [ "$n_reviewing" -gt 0 ]; then
+  echo "⏳ Review en cours : $(printf '%s' "$reviewing_iids" | sed 's/^/!/' | tr '\n' ' ') | size=11 color=orange"
+fi
+[ "$local_reviewing" -eq 1 ] && echo "⏳ Review de ta branche locale en cours | size=11 color=orange"
 if [ "$total" -gt 0 ]; then
   extra=""; [ "$lastapprover" -gt 0 ] && extra=" · 🎯 $lastapprover dont tu es le dernier"
   echo "$unapproved à approuver · $overdue en retard (>${NAG_HOURS}h)$extra | size=11 color=gray"
@@ -134,8 +146,12 @@ else
     echo "-- ${title:-(sans titre)} | color=gray"
     echo "-- $status | color=gray"
     echo "-- 🌐 Ouvrir la MR | href=$url"
+    in_review=0; printf '%s\n' "$reviewing_iids" | grep -qxF "$iid" && in_review=1
     if [ -n "$report" ]; then
       echo "-- 📄 Ouvrir le rapport | bash=/usr/bin/open param1=-a param2=\"$APP\" param3=$report terminal=false"
+      [ "$in_review" -eq 1 ] && echo "-- ⏳ Nouvelle review en cours… | color=orange"
+    elif [ "$in_review" -eq 1 ]; then
+      echo "-- ⏳ Review en cours… | color=orange"
     elif [ "$trivial" = "true" ]; then
       echo "-- 🔧 Pas de review auto — à reviewer toi-même | color=gray"
     else

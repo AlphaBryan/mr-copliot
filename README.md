@@ -179,15 +179,17 @@ d'ouvrir la MR. Notif au lancement, puis notif cliquable quand le rapport est pr
 | `🔍✓` | Tout est approuvé (plus de chiffre) |
 | `🔍💤` | Hors heures actives |
 | `🔍⏹` | Bot arrêté (non chargé dans launchd) |
+| `… ⏳` | **Une review est en cours** (suffixe ajouté à l'icône, quel que soit l'état) |
 
-Priorité d'affichage : santé `⚠️` > dernier approbateur `🎯` > en retard `🔴` > compte `🔍`.
+Priorité d'affichage : santé `⚠️` > dernier approbateur `🎯` > en retard `🔴` > compte `🔍`. Le suffixe
+`⏳` s'ajoute à n'importe lequel tant qu'un `review.sh` tourne (détecté en local via `pgrep`).
 
 **Menu déroulant :**
-- État du bot (chargé/arrêté + `⚠️` si souci de santé), heures actives, dernier passage, résumé
-  « X à approuver · Y en retard · 🎯 Z dont tu es le dernier ».
+- État du bot (chargé/arrêté + `⚠️` si souci de santé), heures actives, dernier passage, une ligne
+  **⏳ Review en cours : !X** si une review tourne, et le résumé « X à approuver · Y en retard · 🎯 Z ».
 - La liste des **MR ouvertes** avec, pour chacune : `✅` grisé (approuvée), `🎯` orange (tu es le dernier),
   `🟡` (à approuver), `🔴` (en attente > seuil). Sous-menu : titre, statut, **🌐 Ouvrir la MR** (seul lien
-  qui ouvre la MR), **📄 Ouvrir le rapport** (ou `🔧 Pas de review auto` pour une MR triviale / non auto-reviewée).
+  qui ouvre la MR), puis **⏳ Review en cours…** / **📄 Ouvrir le rapport** / `🔧 Pas de review auto`.
 - Actions : **↻ Forcer un check**, **🔎 Reviewer ma branche locale**, **📁 Dossier des rapports**,
   **📜 Voir les logs** (dossier des logs + `check.log` / `learn.log` / dernier `post-*.log`, plus un
   aperçu des dernières lignes de `check.log`), **📊 Qualité review (auto-éval)** (tendance : attrapé/total
