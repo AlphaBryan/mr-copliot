@@ -23,6 +23,7 @@ learn-state.tsv
 open.json
 health.json
 .check.lock/
+.paused
 
 # Machine-specific config (absolute paths, watched usernames, ntfy token).
 # Copy config.example.json -> config.json and fill in locally.

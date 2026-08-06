@@ -18,6 +18,9 @@ WE=$(jq -r '.work_end_hour' "$CONFIG" 2>/dev/null); WE=${WE:-17}
 # Bot chargé dans launchd ?
 if launchctl print "gui/$UID_/$LABEL" >/dev/null 2>&1; then loaded=1; else loaded=0; fi
 
+# En pause ? (fichier .paused créé par le bouton du widget)
+paused=0; [ -f "$DIR/.paused" ] && paused=1
+
 # Dans les heures de travail ?
 HOUR=$((10#$(date +%H))); DOW=$(date +%u); inhours=0
 [ "$DOW" -ge 1 ] && [ "$DOW" -le 5 ] && [ "$HOUR" -ge "$WS" ] && [ "$HOUR" -lt "$WE" ] && inhours=1
@@ -33,7 +36,7 @@ now=$(date +%s)
 HEALTH="$DIR/health.json"
 HALERT_AFTER=$(jq -r '.health_alert_after // 3' "$CONFIG" 2>/dev/null); HALERT_AFTER=${HALERT_AFTER:-3}
 health_warn=0; health_msg=""
-if [ "$loaded" -eq 1 ] && [ "$inhours" -eq 1 ]; then
+if [ "$loaded" -eq 1 ] && [ "$inhours" -eq 1 ] && [ "$paused" -ne 1 ]; then
   if [ -f "$HEALTH" ]; then
     cf=$(jq -r '.consecutiveFailures // 0' "$HEALTH" 2>/dev/null); [ -z "$cf" ] && cf=0
     ls=$(jq -r '.lastSuccess // 0' "$HEALTH" 2>/dev/null); [ -z "$ls" ] && ls=0
@@ -72,6 +75,8 @@ local_reviewing=0; pgrep -f 'review-local\.sh' >/dev/null 2>&1 && local_reviewin
 rev_badge=""; { [ "$n_reviewing" -gt 0 ] || [ "$local_reviewing" -eq 1 ]; } && rev_badge=" ⏳"
 if [ "$loaded" -ne 1 ]; then
   mb="🔍⏹"
+elif [ "$paused" -eq 1 ]; then
+  mb="🔍⏸"                                     # mis en pause manuellement (bouton du widget)
 elif [ "$health_warn" -eq 1 ]; then
   mb="🔍⚠️"                                    # bot en peine : API en échec ou plus de passage récent
 elif [ "$lastapprover" -gt 0 ]; then
@@ -88,6 +93,7 @@ echo "---"
 
 # --- Statut ---
 [ "$health_warn" -eq 1 ] && echo "⚠️ $health_msg | color=red"
+[ "$paused" -eq 1 ] && echo "⏸ En pause (ne review ni ne poste rien) | color=orange"
 if [ "$loaded" -eq 1 ]; then echo "Bot chargé | color=green"; else echo "Bot arrêté | color=red"; fi
 if [ "$inhours" -eq 1 ]; then echo "Heures actives (${WS}h-${WE}h) | color=green"; else echo "Hors heures (${WS}h-${WE}h, lun-ven) | color=gray"; fi
 lastts=$(tail -n 1 "$DIR/logs/check.log" 2>/dev/null | cut -c1-19)
@@ -162,6 +168,12 @@ fi
 echo "---"
 
 # --- Actions ---
+# Pause / reprise du bot : bascule le fichier .paused (check.sh ne fait rien tant qu'il existe).
+if [ "$paused" -eq 1 ]; then
+  echo "▶️ Reprendre le bot | bash=/bin/rm param1=-f param2=$DIR/.paused terminal=false refresh=true"
+else
+  echo "⏸ Mettre le bot en pause | bash=/usr/bin/touch param1=$DIR/.paused terminal=false refresh=true"
+fi
 echo "↻ Forcer un check maintenant | bash=$DIR/force-check.sh terminal=false refresh=true"
 
 # Review de ma branche locale courante (avant MR)

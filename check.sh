@@ -18,6 +18,13 @@ SEED=0
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG"; }
 
+# --- Pause : si .paused existe (bouton du widget), le bot ne fait RIEN ce passage ---
+# launchd continue de tourner ; la reprise (suppression du fichier) est immédiate.
+if [ -f "$DIR/.paused" ]; then
+  log "PAUSE — .paused présent, passage sauté"
+  exit 0
+fi
+
 # --- Verrou anti-chevauchement : un seul check.sh à la fois ---
 # Les reviews claude peuvent dépasser l'intervalle launchd de 15 min. Sans verrou, deux passages se
 # chevaucheraient → doubles notifs/reviews, double auto-post, courses sur state.tsv/open.json.

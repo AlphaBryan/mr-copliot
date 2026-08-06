@@ -178,6 +178,7 @@ d'ouvrir la MR. Notif au lancement, puis notif cliquable quand le rapport est pr
 | `🔍 N` | `N` MR restent à approuver (aucune en retard) |
 | `🔍✓` | Tout est approuvé (plus de chiffre) |
 | `🔍💤` | Hors heures actives |
+| `🔍⏸` | **En pause** (bouton du widget) : le bot ne review ni ne poste rien |
 | `🔍⏹` | Bot arrêté (non chargé dans launchd) |
 | `… ⏳` | **Une review est en cours** (suffixe ajouté à l'icône, quel que soit l'état) |
 
@@ -190,7 +191,9 @@ Priorité d'affichage : santé `⚠️` > dernier approbateur `🎯` > en retard
 - La liste des **MR ouvertes** avec, pour chacune : `✅` grisé (approuvée), `🎯` orange (tu es le dernier),
   `🟡` (à approuver), `🔴` (en attente > seuil). Sous-menu : titre, statut, **🌐 Ouvrir la MR** (seul lien
   qui ouvre la MR), puis **⏳ Review en cours…** / **📄 Ouvrir le rapport** / `🔧 Pas de review auto`.
-- Actions : **↻ Forcer un check**, **🔎 Reviewer ma branche locale**, **📁 Dossier des rapports**,
+- Actions : **⏸ Mettre le bot en pause** / **▶️ Reprendre** (bascule le fichier `.paused` ; `check.sh`
+  ne fait rien tant qu'il existe, launchd continue de tourner → reprise immédiate), **↻ Forcer un check**,
+  **🔎 Reviewer ma branche locale**, **📁 Dossier des rapports**,
   **📜 Voir les logs** (dossier des logs + `check.log` / `learn.log` / dernier `post-*.log`, plus un
   aperçu des dernières lignes de `check.log`), **📊 Qualité review (auto-éval)** (tendance : attrapé/total
   + %, et les dernières MR notées, depuis `grades/summary.tsv`), **↻ Rafraîchir**.
