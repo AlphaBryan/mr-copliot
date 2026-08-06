@@ -99,6 +99,44 @@ if [ "${n_items:-0}" -eq 0 ]; then
   log "DONE — rien à poster (section 4 vide)"; rm -f "$DIFFS" "$ITEMS"; exit 0
 fi
 
+# --- Gate de validation : un 2e agent (contexte réduit = juste le diff + les commentaires) confirme
+#     que chaque constat est valide et mérite d'être posté. Écarte les faux / non fondés / bruit. ---
+VALIDATE=$(jq -r '.validate_comments // true' "$CONFIG")
+VALIDATE_MODEL=$(jq -r '.validate_model // .review_model // "sonnet"' "$CONFIG")
+VALIDATE_PROMPT="$DIR/prompts/validate-prompt.md"
+MAXDIFF=$(jq -r '.max_diff_lines // 2500' "$CONFIG")
+if [ "$VALIDATE" = "true" ] && [ -f "$VALIDATE_PROMPT" ]; then
+  vin=$(mktemp)
+  {
+    cat "$VALIDATE_PROMPT"
+    echo; echo "=== DIFF DE LA MR (peut être tronqué) ==="
+    jq -r '.[] | "--- " + .new_path + " ---\n" + (.diff // "")' "$DIFFS" 2>/dev/null | head -n "$MAXDIFF"
+    echo; echo "=== COMMENTAIRES À VALIDER ==="
+    vn=0
+    while IFS="$(printf '\t')" read -r vc vt vx; do
+      [ -z "$vt" ] && continue
+      vn=$((vn + 1)); printf '[%s] %s — %s\n' "$vn" "$vt" "$vx"
+    done < "$ITEMS"
+  } > "$vin"
+  log "validation : appel du 2e agent (model=$VALIDATE_MODEL) sur $n_items commentaire(s)…"
+  verdict=$(claude -p --model "$VALIDATE_MODEL" --permission-mode acceptEdits \
+    --disallowedTools "Write" "Edit" "MultiEdit" "NotebookEdit" "Bash" < "$vin" 2>>"$LOG")
+  rm -f "$vin"
+  # Extraction tolérante du tableau d'index à garder.
+  arr=$(printf '%s' "$verdict" | tr -d '\r' | sed -n 's/.*\(\[[0-9, ]*\]\).*/\1/p' | head -1)
+  if [ -n "$arr" ] && printf '%s' "$arr" | jq -e 'type=="array"' >/dev/null 2>&1; then
+    keep=$(printf '%s' "$arr" | jq -r '.[] | select(type=="number")' | tr '\n' ' ')
+    awk -v k="$keep" 'BEGIN{split(k,a," ");for(i in a)S[a[i]]=1} NF{n++; if(S[n]) print}' "$ITEMS" > "$ITEMS.kept" 2>/dev/null && mv "$ITEMS.kept" "$ITEMS"
+    kept_n=$(grep -c . "$ITEMS" || true)
+    log "validation : $kept_n/$n_items commentaire(s) gardé(s) ($((n_items - kept_n)) écarté(s))"
+    if [ "${kept_n:-0}" -eq 0 ]; then
+      log "DONE — tous les commentaires écartés par la validation, rien à poster"; rm -f "$DIFFS" "$ITEMS"; exit 0
+    fi
+  else
+    log "WARN validation illisible — on garde TOUS les commentaires (gate best-effort)"
+  fi
+fi
+
 # --- poste une discussion INLINE (curl + Bearer) ; renvoie 0 si ANCRÉE, 1 sinon (repli) ---
 post_inline() { # $1 path  $2 new_line  $3 old_line("" si added)  $4 body
   local path="$1" nl="$2" ol="$3" body="$4" resp

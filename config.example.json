@@ -21,6 +21,8 @@
   "auto_post_review": false,
   "post_delay_minutes": 15,
   "auto_grade_reviews": false,
+  "validate_comments": true,
+  "validate_model": "sonnet",
   "review_model": "sonnet",
   "max_diff_lines": 2500,
   "learn_from_reviewers": [
