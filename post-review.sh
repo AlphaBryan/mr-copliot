@@ -23,6 +23,11 @@ DRYRUN="${POST_DRYRUN:-0}"
 PROJECT=$(jq -r '.project' "$CONFIG")
 ENC=$(printf '%s' "$PROJECT" | sed 's#/#%2F#g')
 RDIR=$(jq -r '.reviews_dir // ""' "$CONFIG"); [ -z "$RDIR" ] && RDIR="$DIR/reviews"
+APIBASE="https://gitlab.com/api/v4"
+# Token glab (OAuth) pour poster via curl. `glab api -f position[...]` N'ancre PAS les discussions
+# (il n'envoie pas l'objet position imbriqué) -> on poste avec curl + Authorization: Bearer, qui, lui,
+# transmet correctement les champs position[...] (ancrage inline vérifié).
+GLTOKEN=$(glab auth status --show-token 2>&1 | grep -oE '[0-9a-fA-F]{40,}' | head -1)
 
 REPORT="${2:-$(ls -t "$RDIR"/*-mr"$IID"-*.md 2>/dev/null | head -1)}"
 if [ -z "$REPORT" ] || [ ! -f "$REPORT" ]; then
@@ -44,6 +49,9 @@ DIFFS=$(mktemp)
 glab api "projects/$ENC/merge_requests/$IID/diffs?per_page=100" 2>>"$LOG" > "$DIFFS"
 if ! jq -e 'type=="array"' "$DIFFS" >/dev/null 2>&1; then
   log "ERROR diffs indisponibles pour !$IID — abandon"; rm -f "$DIFFS"; exit 1
+fi
+if [ -z "$GLTOKEN" ] && [ "$DRYRUN" != "1" ]; then
+  log "ERROR token glab introuvable — impossible de poster (abandon)"; rm -f "$DIFFS"; exit 1
 fi
 
 # --- parseur de ligne : diff unifié sur stdin, TARGET=new_line -> "type<TAB>old<TAB>new" ou rien ---
@@ -91,41 +99,44 @@ if [ "${n_items:-0}" -eq 0 ]; then
   log "DONE — rien à poster (section 4 vide)"; rm -f "$DIFFS" "$ITEMS"; exit 0
 fi
 
-# --- poste une discussion inline ; renvoie 0 si ok, 1 sinon (repli) ---
+# --- poste une discussion INLINE (curl + Bearer) ; renvoie 0 si ANCRÉE, 1 sinon (repli) ---
 post_inline() { # $1 path  $2 new_line  $3 old_line("" si added)  $4 body
-  local path="$1" nl="$2" ol="$3" body="$4" resp rc
+  local path="$1" nl="$2" ol="$3" body="$4" resp
   if [ "$DRYRUN" = "1" ]; then
     log "[DRYRUN] inline $path:$nl (old=${ol:-∅}) :: $(printf '%s' "$body" | head -c 80)"
     return 0
   fi
-  local args=(-X POST "projects/$ENC/merge_requests/$IID/discussions"
-    -f "body=$body"
-    -f "position[position_type]=text"
-    -f "position[base_sha]=$BASE" -f "position[head_sha]=$HEAD" -f "position[start_sha]=$START"
-    -f "position[new_path]=$path" -f "position[old_path]=$path"
-    -f "position[new_line]=$nl")
-  [ -n "$ol" ] && args+=(-f "position[old_line]=$ol")
-  resp=$(glab api "${args[@]}" 2>>"$LOG"); rc=$?
-  if [ "$rc" -ne 0 ] || printf '%s' "$resp" | jq -e 'has("message") or has("error")' >/dev/null 2>&1; then
-    log "WARN POST inline KO $path:$nl (rc=$rc) resp=$(printf '%s' "$resp" | head -c 200)"
-    return 1
+  local args=(-s -X POST "$APIBASE/projects/$ENC/merge_requests/$IID/discussions"
+    -H "Authorization: Bearer $GLTOKEN"
+    --data-urlencode "body=$body"
+    --data-urlencode "position[position_type]=text"
+    --data-urlencode "position[base_sha]=$BASE" --data-urlencode "position[head_sha]=$HEAD" --data-urlencode "position[start_sha]=$START"
+    --data-urlencode "position[new_path]=$path" --data-urlencode "position[old_path]=$path"
+    --data-urlencode "position[new_line]=$nl")
+  [ -n "$ol" ] && args+=(--data-urlencode "position[old_line]=$ol")
+  resp=$(curl "${args[@]}" 2>>"$LOG")
+  # Succès = la discussion est réellement ANCRÉE (position.new_line non nulle). Sinon -> repli.
+  if printf '%s' "$resp" | jq -e '.notes[0].position.new_line != null' >/dev/null 2>&1; then
+    return 0
   fi
-  return 0
+  log "WARN POST inline KO $path:$nl resp=$(printf '%s' "$resp" | head -c 200)"
+  return 1
 }
 
-# --- poste un commentaire GÉNÉRAL individuel (non ancré) ; renvoie 0 si ok, 1 sinon ---
+# --- poste un commentaire GÉNÉRAL individuel (curl + Bearer) ; renvoie 0 si ok, 1 sinon ---
 post_note() { # $1 body
-  local body="$1" resp rc
+  local body="$1" resp
   if [ "$DRYRUN" = "1" ]; then
     log "[DRYRUN] note :: $(printf '%s' "$body" | head -c 100)"
     return 0
   fi
-  resp=$(glab api -X POST "projects/$ENC/merge_requests/$IID/notes" -f "body=$body" 2>>"$LOG"); rc=$?
-  if [ "$rc" -ne 0 ] || printf '%s' "$resp" | jq -e 'has("message") or has("error")' >/dev/null 2>&1; then
-    log "WARN POST note KO (rc=$rc) resp=$(printf '%s' "$resp" | head -c 200)"
-    return 1
+  resp=$(curl -s -X POST "$APIBASE/projects/$ENC/merge_requests/$IID/notes" \
+    -H "Authorization: Bearer $GLTOKEN" --data-urlencode "body=$body" 2>>"$LOG")
+  if printf '%s' "$resp" | jq -e '.id != null' >/dev/null 2>&1; then
+    return 0
   fi
-  return 0
+  log "WARN POST note KO resp=$(printf '%s' "$resp" | head -c 200)"
+  return 1
 }
 
 posted=0; fell=0
