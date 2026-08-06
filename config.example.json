@@ -16,6 +16,7 @@
   "trivial_small_max_files": 2,
   "trivial_small_max_lines": 30,
   "trivial_reminder_minutes": 15,
+  "review_max_attempts": 3,
   "auto_post_review": false,
   "post_delay_minutes": 15,
   "auto_grade_reviews": false,

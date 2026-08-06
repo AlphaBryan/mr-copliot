@@ -63,6 +63,9 @@ TRIVIAL_SMALL_MAX_FILES=$(jq -r '.trivial_small_max_files // 2' "$CONFIG")   # p
 TRIVIAL_SMALL_MAX_LINES=$(jq -r '.trivial_small_max_lines // 30' "$CONFIG")  # ET ≤ M lignes changées
 TRIVIAL_REMINDER_MIN=$(jq -r '.trivial_reminder_minutes // 15' "$CONFIG")    # relance « à reviewer » toutes les N min
 TRIVIAL_REMINDER_SECS=$((TRIVIAL_REMINDER_MIN * 60))
+# Retry borné d'une review sans rapport (échec/coupure claude). Au-delà, on abandonne l'auto-review
+# et on bascule sur « à reviewer toi-même » (ex. MR trop grosse pour finir dans le timeout).
+REVIEW_MAX_ATTEMPTS=$(jq -r '.review_max_attempts // 3' "$CONFIG")
 # Auto-évaluation : après merge d'une MR reviewée, comparer ma review aux commentaires humains.
 AUTO_GRADE=$(jq -r '.auto_grade_reviews // false' "$CONFIG")
 GRADED_STATE="$DIR/graded-state.tsv"; [ "$AUTO_GRADE" = "true" ] && touch "$GRADED_STATE" 2>/dev/null
@@ -217,8 +220,8 @@ for u in "${USERS[@]}"; do
         # toutes les TRIVIAL_REMINDER_MIN min tant que je ne l'ai pas approuvée.
         if [ "$SEED" -ne 1 ] && [ "$INHOURS" -eq 1 ] \
            && { [ "$trivial_reminded_at" -eq 0 ] || [ "$((NOW - trivial_reminded_at))" -ge "$TRIVIAL_REMINDER_SECS" ]; }; then
-          terminal-notifier -title "🔎 À reviewer toi-même ($author)" -subtitle "!$iid petit changement, pas de review auto" -message "$title" -open "$url" -group "mrwatch-triv-$iid" 2>>"$LOG"
-          ntfy_send "🔎 À reviewer: $author" "!$iid $title — petit changement, review manuelle" "$url" "eyes"
+          terminal-notifier -title "🔎 À reviewer toi-même ($author)" -subtitle "!$iid — pas de review auto" -message "$title" -open "$url" -group "mrwatch-triv-$iid" 2>>"$LOG"
+          ntfy_send "🔎 À reviewer: $author" "!$iid $title — pas de review auto, review manuelle" "$url" "eyes"
           trivial_reminded_at=$NOW
           log "NAG-TRIVIAL !$iid $author (relance ${TRIVIAL_REMINDER_MIN}min)"
         fi
@@ -239,6 +242,7 @@ for u in "${USERS[@]}"; do
     # État d'auto-post reporté du passage précédent (open.json). (trivial + trivial_reminded_at déjà lus plus haut.)
     post_eligible=$(prev_field "$iid" postEligible); [ "$post_eligible" = "true" ] || post_eligible=false
     review_posted=$(prev_field "$iid" reviewPosted); [ "$review_posted" = "true" ] || review_posted=false
+    review_retries=$(prev_field "$iid" reviewRetries); case "$review_retries" in ''|*[!0-9]*) review_retries=0;; esac
 
     if [ "$SEED" -eq 1 ]; then
       printf '%s\t%s\n' "$iid" "$sha" >> "$NEWSTATE"
@@ -246,6 +250,7 @@ for u in "${USERS[@]}"; do
       post_eligible=false   # baseline : les MR déjà ouvertes ne s'auto-postent jamais
     elif [ "$INHOURS" -eq 1 ] && [ "$prev" != "$sha" ]; then
       if [ -z "$prev" ]; then kind="Nouvelle MR"; post_eligible=true; else kind="MR mise a jour"; fi
+      review_retries=0   # nouveau code -> compteur de tentatives remis à zéro
       # Triviale (bump OU petit changement) ? On teste seulement à la 1re détection.
       trivial=false
       [ "$SKIP_TRIVIAL" = "true" ] && [ -z "$prev" ] && trivial=$(is_trivial_mr "$iid")
@@ -267,6 +272,23 @@ for u in "${USERS[@]}"; do
       # MR inchangée, ou hors heures : on conserve l'entrée existante si elle existe.
       # (jamais vue + hors heures -> non ajoutée -> sera reviewée au prochain passage en heures actives)
       [ -n "$prev" ] && printf '%s\t%s\n' "$iid" "$prev" >> "$NEWSTATE"
+      # Retry BORNÉ : MR déjà vue, non triviale, mais SANS rapport (review échouée/coupée, ex. Mac en
+      # veille pendant l'appel claude). On re-tente en silence jusqu'à REVIEW_MAX_ATTEMPTS ; au-delà on
+      # abandonne l'auto-review et on bascule en « à reviewer toi-même » (ex. MR trop grosse).
+      if [ "$INHOURS" -eq 1 ] && [ -n "$prev" ] && [ "$trivial" != "true" ] \
+         && ! ls "$REVIEWS_DIR"/*-mr"$iid"-*.md >/dev/null 2>&1; then
+        if [ "$review_retries" -lt "$REVIEW_MAX_ATTEMPTS" ]; then
+          review_retries=$((review_retries + 1))
+          log "RETRY-REVIEW !$iid $u (rapport manquant, tentative $review_retries/$REVIEW_MAX_ATTEMPTS)"
+          REVIEW_QUEUE="$REVIEW_QUEUE$iid "
+        else
+          # abandon : plus de review auto, on passe la main. trivial=true -> relance « à reviewer toi-même ».
+          trivial=true; post_eligible=false; trivial_reminded_at=$NOW
+          terminal-notifier -title "🔎 Review auto impossible ($author)" -subtitle "!$iid — à reviewer toi-même" -message "$title" -open "$url" -group "mrwatch-giveup-$iid" 2>>"$LOG"
+          ntfy_send "🔎 Review auto impossible: $author" "!$iid $title — trop long/gros, review manuelle" "$url" "eyes"
+          log "REVIEW-GIVEUP !$iid $u (après $REVIEW_MAX_ATTEMPTS tentatives) -> review manuelle"
+        fi
+      fi
     fi
 
     # --- Auto-post de la review en commentaires inline, ~POST_DELAY après la création ---
@@ -295,11 +317,12 @@ for u in "${USERS[@]}"; do
       --argjson postEligible "$post_eligible" --argjson reviewPosted "$review_posted" \
       --argjson approvalsLeft "$approvals_left" --argjson lastApproverNotifiedAt "$last_notif_at" \
       --argjson trivial "$trivial" --argjson trivialRemindedAt "$trivial_reminded_at" \
+      --argjson reviewRetries "$review_retries" \
       '{iid:$iid, author:$author, title:$title, url:$url, approved:$approved,
         firstSeen:(if $firstSeen=="" then null else ($firstSeen|tonumber) end), notified2h:$notified2h,
         postEligible:$postEligible, reviewPosted:$reviewPosted,
         approvalsLeft:$approvalsLeft, lastApproverNotifiedAt:$lastApproverNotifiedAt,
-        trivial:$trivial, trivialRemindedAt:$trivialRemindedAt}' >> "$OPENTMP"
+        trivial:$trivial, trivialRemindedAt:$trivialRemindedAt, reviewRetries:$reviewRetries}' >> "$OPENTMP"
   done
 done
 

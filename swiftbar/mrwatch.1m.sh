@@ -137,7 +137,7 @@ else
     if [ -n "$report" ]; then
       echo "-- 📄 Ouvrir le rapport | bash=/usr/bin/open param1=-a param2=\"$APP\" param3=$report terminal=false"
     elif [ "$trivial" = "true" ]; then
-      echo "-- 🔧 Review sautée (bump / petit changement) — à reviewer toi-même | color=gray"
+      echo "-- 🔧 Pas de review auto — à reviewer toi-même | color=gray"
     else
       echo "-- (rapport pas encore généré) | color=gray"
     fi
