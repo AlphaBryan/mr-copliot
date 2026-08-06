@@ -144,6 +144,10 @@ posted=0; fell=0
 while IFS="$(printf '\t')" read -r cat tok text; do
   [ -z "$tok" ] && continue
   path="${tok%:*}"; lineitem="${tok##*:}"
+  # Le rapport peut citer un NOM COURT (mode diff) ; on résout vers le new_path complet du diff
+  # (si non ambigu) pour permettre l'ancrage inline. Ambigu / introuvable -> on garde tel quel.
+  fp=$(jq -r --arg p "$path" '[.[] | select(.new_path==$p or (.new_path|endswith("/"+$p))) | .new_path] | unique | if length==1 then .[0] else "" end' "$DIFFS" 2>/dev/null)
+  [ -n "$fp" ] && path="$fp"
   target=""
   case "$lineitem" in
     ''|*[!0-9]*)
