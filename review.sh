@@ -61,13 +61,31 @@ if [ -n "$ticket" ] && [ -x "$JIRA" ]; then
   fi
 fi
 
+# --- Mode diff forcé : override explicite OU MR trop grosse pour une exploration repo ---
+# Le mode repo (claude explore tout le code) DÉPASSE le timeout sur les grosses MR -> jamais de rapport
+# (cas ADF-3878 / MR 55 fichiers). Au-delà de review_repo_max_files, on bascule en mode diff : borné par
+# max_diff_lines, rapide, et il ABOUTIT. MRWATCH_MODE=diff force le mode diff quelle que soit la taille.
+REPO_MAX_FILES=$(jq -r '.review_repo_max_files // 40' "$CONFIG")
+force_diff=0
+if [ "${MRWATCH_MODE:-}" = "diff" ]; then
+  force_diff=1; log "MRWATCH_MODE=diff -> mode diff forcé"
+else
+  nfiles=$(printf '%s' "$mr" | jq -r '.changes_count // empty' | tr -dc '0-9')
+  [ -z "$nfiles" ] && nfiles=$(glab api "projects/$ENC/merge_requests/$IID/diffs?per_page=100" 2>>"$LOG" | jq 'length' 2>/dev/null)
+  case "$nfiles" in ''|*[!0-9]*) nfiles=0;; esac
+  if [ "$nfiles" -gt "$REPO_MAX_FILES" ]; then
+    force_diff=1
+    log "MR volumineuse ($nfiles fichiers > $REPO_MAX_FILES) -> mode diff forcé (repo dépasserait le timeout)"
+  fi
+fi
+
 # --- prépare le worktree (mode repo) ---
 MODE="diff"
 WT=""
 cleanup_wt() { [ -n "$WT" ] && [ -n "$REPO" ] && git -C "$REPO" worktree remove --force "$WT" >/dev/null 2>&1; }
 trap cleanup_wt EXIT
 
-if [ -n "$REPO" ] && git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+if [ "$force_diff" -eq 0 ] && [ -n "$REPO" ] && git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   mkdir -p "$WT_DIR"
   WT="$WT_DIR/mr-$IID"
   git -C "$REPO" worktree remove --force "$WT" >/dev/null 2>&1 || true
