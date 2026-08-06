@@ -187,7 +187,12 @@ if [ "$MODE" = "repo" ]; then
     --allowedTools "Read" "Grep" "Glob" "Bash(git:*)" "Bash(grep:*)" "Bash(rg:*)" "Bash(cat:*)" "Bash(sed:*)" "Bash(ls:*)" "Bash(glab:*)" \
     < "$tmp" 2>>"$LOG")
 else
-  report_body=$(claude -p --model "$MODEL" < "$tmp" 2>>"$LOG")
+  # Mode diff = transformation texte→texte (le diff est dans le prompt) : aucun outil requis.
+  # --permission-mode acceptEdits + --disallowedTools évitent que claude se FIGE en attente d'une
+  # permission/trust sur un workspace non trusté (sinon 0% CPU, jamais de rapport, puis timeout).
+  report_body=$(claude -p --model "$MODEL" --permission-mode acceptEdits \
+    --disallowedTools "Write" "Edit" "MultiEdit" "NotebookEdit" "Bash" \
+    < "$tmp" 2>>"$LOG")
 fi
 rm -f "$tmp"
 cleanup_wt; WT=""
