@@ -89,6 +89,13 @@ fichiers, API KO), la review a lieu normalement.
 Priorité des relances sur une MR non approuvée : **🎯 dernier approbateur** > **🔎 triviale à reviewer** >
 **⏰ en attente > seuil**.
 
+**Review échouée / MR trop grosse** : si une review ne produit pas de rapport (claude coupé par une mise
+en veille du Mac, ou MR trop grosse pour finir dans le `timeout` de 10 min), `check.sh` la **re-tente en
+silence** jusqu'à `review_max_attempts` (défaut 3). Au-delà, il **abandonne l'auto-review** et bascule la
+MR en **« 🔎 à reviewer toi-même »** (mêmes relances que le skip trivial). Ça évite qu'une review coincée
+tourne en boucle. Un **verrou** (`.check.lock`) garantit par ailleurs qu'un seul `check.sh` tourne à la
+fois (les reviews peuvent dépasser l'intervalle de 15 min) — pas de reviews concurrentes ni de double post.
+
 ### Auto-évaluation vs les reviewers (score attrapé / manqué)
 
 Quand `auto_grade_reviews` est actif, dès qu'une MR que j'avais reviewée **passe en `merged`**, `check.sh`
@@ -190,7 +197,7 @@ Priorité d'affichage : santé `⚠️` > dernier approbateur `🎯` > en retard
 
 | Fichier | Rôle |
 |---|---|
-| `config.json` | Watchlist, heures, `approval_nag_hours`, `last_approver_repeat_minutes` (relance dernier approbateur, défaut 15), auto-post (`auto_post_review`, `post_delay_minutes`), santé (`health_alert_after`), skip trivial (`skip_trivial_reviews`, `trivial_max_files`, `trivial_file_patterns`, `trivial_small_max_files`, `trivial_small_max_lines`, `trivial_reminder_minutes`), auto-éval (`auto_grade_reviews`), modèle, plafond diff, `repo_dir`, `local_repo_dir`, filtre IA (`learn_ai_filter`, `learn_exclude_authors`, `learn_ai_markers`). **À éditer ici.** |
+| `config.json` | Watchlist, heures, `approval_nag_hours`, `last_approver_repeat_minutes` (relance dernier approbateur, défaut 15), auto-post (`auto_post_review`, `post_delay_minutes`), santé (`health_alert_after`), skip trivial (`skip_trivial_reviews`, `trivial_max_files`, `trivial_file_patterns`, `trivial_small_max_files`, `trivial_small_max_lines`, `trivial_reminder_minutes`, `review_max_attempts`), auto-éval (`auto_grade_reviews`), modèle, plafond diff, `repo_dir`, `local_repo_dir`, filtre IA (`learn_ai_filter`, `learn_exclude_authors`, `learn_ai_markers`). **À éditer ici.** |
 | `config.example.json` | Template de config à copier vers `config.json` (non versionné). |
 | `check.sh` | Détection + notif + approbations + reviews + auto-post + skip trivial + santé + auto-éval. Toutes les 15 min (launchd). |
 | `force-check.sh` | Force un passage de `check.sh` maintenant (bouton du widget). |
