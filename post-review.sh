@@ -113,7 +113,21 @@ post_inline() { # $1 path  $2 new_line  $3 old_line("" si added)  $4 body
   return 0
 }
 
-LEFTOVERS=$(mktemp)   # commentaires non ancrés -> une note générale
+# --- poste un commentaire GÉNÉRAL individuel (non ancré) ; renvoie 0 si ok, 1 sinon ---
+post_note() { # $1 body
+  local body="$1" resp rc
+  if [ "$DRYRUN" = "1" ]; then
+    log "[DRYRUN] note :: $(printf '%s' "$body" | head -c 100)"
+    return 0
+  fi
+  resp=$(glab api -X POST "projects/$ENC/merge_requests/$IID/notes" -f "body=$body" 2>>"$LOG"); rc=$?
+  if [ "$rc" -ne 0 ] || printf '%s' "$resp" | jq -e 'has("message") or has("error")' >/dev/null 2>&1; then
+    log "WARN POST note KO (rc=$rc) resp=$(printf '%s' "$resp" | head -c 200)"
+    return 1
+  fi
+  return 0
+}
+
 posted=0; fell=0
 
 while IFS="$(printf '\t')" read -r cat tok text; do
@@ -136,37 +150,19 @@ while IFS="$(printf '\t')" read -r cat tok text; do
       ktype=$(printf '%s' "$kind" | cut -f1)
       kold=$(printf '%s' "$kind" | cut -f2)
       [ "$ktype" = "added" ] && kold=""
-      if post_inline "$path" "$target" "$kold" "$cat : $text"; then
+      # Commentaire INLINE = juste le texte du constat (ancré sur la ligne -> le fichier est implicite).
+      if post_inline "$path" "$target" "$kold" "$text"; then
         posted=$((posted+1)); ok=1
       fi
     fi
   fi
   if [ "$ok" -eq 0 ]; then
-    printf -- '- **%s** (%s) — %s\n' "$tok" "$cat" "$text" >> "$LEFTOVERS"
-    fell=$((fell+1))
+    # Non ancrable inline (ligne absente du diff) : commentaire INDIVIDUEL, sans texte parasite,
+    # préfixé du `fichier:ligne` pour rester lié au code concerné.
+    post_note "\`$tok\` — $text" && fell=$((fell+1))
   fi
 done < "$ITEMS"
 
-# --- note générale de repli (commentaires non ancrables) ---
-if [ "$fell" -gt 0 ]; then
-  note=$({
-    echo "**Review automatique — commentaires non rattachés à une ligne du diff :**"
-    echo
-    cat "$LEFTOVERS"
-    echo
-    echo "_(posté automatiquement par mr-watch)_"
-  })
-  if [ "$DRYRUN" = "1" ]; then
-    log "[DRYRUN] note générale ($fell commentaire(s)) :"
-    printf '%s\n' "$note" >> "$LOG"
-  else
-    resp=$(glab api -X POST "projects/$ENC/merge_requests/$IID/notes" -f "body=$note" 2>>"$LOG"); rc=$?
-    if [ "$rc" -ne 0 ] || printf '%s' "$resp" | jq -e 'has("message") or has("error")' >/dev/null 2>&1; then
-      log "WARN note générale KO (rc=$rc) resp=$(printf '%s' "$resp" | head -c 200)"
-    fi
-  fi
-fi
-
-log "DONE post !$IID — inline=$posted, repli=$fell"
-rm -f "$DIFFS" "$ITEMS" "$LEFTOVERS"
+log "DONE post !$IID — inline=$posted, individuels=$fell"
+rm -f "$DIFFS" "$ITEMS"
 exit 0
