@@ -39,7 +39,7 @@ if [ "$loaded" -eq 1 ] && [ "$inhours" -eq 1 ]; then
     ls=$(jq -r '.lastSuccess // 0' "$HEALTH" 2>/dev/null); [ -z "$ls" ] && ls=0
     if [ "$cf" -ge "$HALERT_AFTER" ]; then
       health_warn=1; health_msg="Appels GitLab en échec ($cf passages) — vérifier glab/réseau"
-    elif [ "$ls" -gt 0 ] && [ "$((now - ls))" -gt 1500 ]; then
+    elif [ "$ls" -gt 0 ] && [ "$((now - ls))" -gt 2100 ]; then
       health_warn=1; health_msg="Aucun passage réussi depuis $(((now - ls) / 60))min — bot bloqué ?"
     fi
   else

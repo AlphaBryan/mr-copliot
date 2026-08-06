@@ -18,6 +18,22 @@ SEED=0
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG"; }
 
+# --- Verrou anti-chevauchement : un seul check.sh à la fois ---
+# Les reviews claude peuvent dépasser l'intervalle launchd de 15 min. Sans verrou, deux passages se
+# chevaucheraient → doubles notifs/reviews, double auto-post, courses sur state.tsv/open.json.
+LOCKDIR="$DIR/.check.lock"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+  oldpid=$(cat "$LOCKDIR/pid" 2>/dev/null || true)
+  if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
+    log "SKIP — un check.sh (pid $oldpid) est déjà en cours, passage sauté"
+    exit 0
+  fi
+  log "WARN verrou périmé (pid ${oldpid:-?} mort) — récupération"
+  rm -rf "$LOCKDIR"; mkdir "$LOCKDIR" 2>/dev/null || { log "ERROR prise du verrou impossible"; exit 0; }
+fi
+echo $$ > "$LOCKDIR/pid"
+trap 'rm -rf "$LOCKDIR"' EXIT
+
 # --- config ---
 PROJECT=$(jq -r '.project' "$CONFIG")
 ENC=$(printf '%s' "$PROJECT" | sed 's#/#%2F#g')
@@ -305,7 +321,34 @@ else
 fi
 rm -f "$OPENTMP"
 
-# --- Reviews en file (LENTES) : lancées APRÈS l'écriture de open.json ---
+# --- Santé (heartbeat) : évaluée MAINTENANT, après le fetch + open.json, AVANT les reviews/notations. ---
+# lastSuccess = « la boucle de surveillance a fetché les MR avec succès ». Les reviews (claude, plusieurs
+# min) viennent après : elles ne doivent PAS retarder le heartbeat, sinon le widget croit le bot bloqué
+# pendant qu'il review tranquillement.
+cf=0; alerted=false; prev_ls=0
+if [ -f "$HEALTH" ]; then
+  cf=$(jq -r '.consecutiveFailures // 0' "$HEALTH" 2>/dev/null); [ -z "$cf" ] && cf=0
+  alerted=$(jq -r '.alerted // false' "$HEALTH" 2>/dev/null); [ "$alerted" = "true" ] || alerted=false
+  prev_ls=$(jq -r '.lastSuccess // 0' "$HEALTH" 2>/dev/null); [ -z "$prev_ls" ] && prev_ls=0
+fi
+if [ "$FETCH_FAILED" -eq 1 ]; then
+  cf=$((cf + 1))
+  if [ "$cf" -ge "$HALERT_AFTER" ] && [ "$alerted" != "true" ]; then
+    ntfy_send "mr-watch en panne" "Appels GitLab en échec depuis $cf passages (~$((cf * 15))min). Vérifier glab (token) / réseau." "" "warning,skull"
+    log "HEALTH ALERT — $cf échecs consécutifs"
+    alerted=true
+  fi
+  jq -nc --argjson cf "$cf" --argjson alerted "$alerted" --argjson ls "$prev_ls" \
+    '{consecutiveFailures:$cf, alerted:$alerted, lastSuccess:$ls}' > "$HEALTH"
+else
+  if [ "$alerted" = "true" ]; then
+    ntfy_send "mr-watch rétabli" "Les appels GitLab refonctionnent." "" "white_check_mark"
+    log "HEALTH OK — rétabli après $cf échec(s)"
+  fi
+  jq -nc --argjson now "$NOW" '{consecutiveFailures:0, alerted:false, lastSuccess:$now}' > "$HEALTH"
+fi
+
+# --- Reviews en file (LENTES) : lancées APRÈS l'écriture de open.json + heartbeat ---
 # Ainsi le widget montre la MR immédiatement ; une review interrompue ne bloque plus le snapshot.
 if [ "$SEED" -ne 1 ]; then
   for rid in $REVIEW_QUEUE; do
@@ -345,31 +388,6 @@ if [ "$AUTO_GRADE" = "true" ] && [ "$SEED" -ne 1 ] && [ "$FETCH_FAILED" -eq 0 ] 
       log "grade !$oid ignoré (state=$st)"
     fi
   done
-fi
-
-# --- Santé : suivi des échecs GitLab + alerte ntfy si le bot est aveugle trop longtemps ---
-# health.json est réécrit à CHAQUE passage → sa présence/fraîcheur sert aussi de heartbeat au widget.
-cf=0; alerted=false; prev_ls=0
-if [ -f "$HEALTH" ]; then
-  cf=$(jq -r '.consecutiveFailures // 0' "$HEALTH" 2>/dev/null); [ -z "$cf" ] && cf=0
-  alerted=$(jq -r '.alerted // false' "$HEALTH" 2>/dev/null); [ "$alerted" = "true" ] || alerted=false
-  prev_ls=$(jq -r '.lastSuccess // 0' "$HEALTH" 2>/dev/null); [ -z "$prev_ls" ] && prev_ls=0
-fi
-if [ "$FETCH_FAILED" -eq 1 ]; then
-  cf=$((cf + 1))
-  if [ "$cf" -ge "$HALERT_AFTER" ] && [ "$alerted" != "true" ]; then
-    ntfy_send "mr-watch en panne" "Appels GitLab en échec depuis $cf passages (~$((cf * 15))min). Vérifier glab (token) / réseau." "" "warning,skull"
-    log "HEALTH ALERT — $cf échecs consécutifs"
-    alerted=true
-  fi
-  jq -nc --argjson cf "$cf" --argjson alerted "$alerted" --argjson ls "$prev_ls" \
-    '{consecutiveFailures:$cf, alerted:$alerted, lastSuccess:$ls}' > "$HEALTH"
-else
-  if [ "$alerted" = "true" ]; then
-    ntfy_send "mr-watch rétabli" "Les appels GitLab refonctionnent." "" "white_check_mark"
-    log "HEALTH OK — rétabli après $cf échec(s)"
-  fi
-  jq -nc --argjson now "$NOW" '{consecutiveFailures:0, alerted:false, lastSuccess:$now}' > "$HEALTH"
 fi
 
 exit 0
