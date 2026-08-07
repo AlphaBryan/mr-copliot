@@ -173,6 +173,18 @@ else
     else
       echo "-- (rapport pas encore généré) | color=gray"
     fi
+    # Bilan du dernier post : combien de commentaires postés / écartés par la validation.
+    st="$DIR/logs/post-$iid.status"
+    if [ -f "$st" ]; then
+      pi=$(sed -n 's/^posted_inline=//p' "$st"); pn=$(sed -n 's/^posted_notes=//p' "$st"); dr=$(sed -n 's/^dropped=//p' "$st")
+      pi=${pi:-0}; pn=${pn:-0}; dr=${dr:-0}; tot=$((pi + pn))
+      extra_inline=""; [ "$pi" -gt 0 ] && extra_inline=" ($pi inline)"
+      if [ "$tot" -gt 0 ]; then
+        echo "-- 💬 $tot commentaire(s) posté(s)$extra_inline · $dr écarté(s) par validation | color=green"
+      else
+        echo "-- 💬 0 posté · $dr écarté(s) par la validation | color=orange"
+      fi
+    fi
   done
 fi
 echo "---"

@@ -99,6 +99,14 @@ if [ "${n_items:-0}" -eq 0 ]; then
   log "DONE — rien à poster (section 4 vide)"; rm -f "$DIFFS" "$ITEMS"; exit 0
 fi
 
+# Suivi pour l'affichage widget (fichier de statut structuré, dernier post réel).
+val_total="$n_items"; val_dropped=0
+write_status() { # $1 détectés  $2 écartés(validation)  $3 postés inline  $4 postés notes
+  [ "$DRYRUN" = "1" ] && return 0
+  { echo "ts=$(date '+%Y-%m-%d %H:%M')"; echo "detected=$1"; echo "dropped=$2"
+    echo "posted_inline=$3"; echo "posted_notes=$4"; } > "$DIR/logs/post-$IID.status"
+}
+
 # --- Gate de validation : un 2e agent (contexte réduit = juste le diff + les commentaires) confirme
 #     que chaque constat est valide et mérite d'être posté. Écarte les faux / non fondés / bruit. ---
 VALIDATE=$(jq -r '.validate_comments // true' "$CONFIG")
@@ -128,8 +136,10 @@ if [ "$VALIDATE" = "true" ] && [ -f "$VALIDATE_PROMPT" ]; then
     keep=$(printf '%s' "$arr" | jq -r '.[] | select(type=="number")' | tr '\n' ' ')
     awk -v k="$keep" 'BEGIN{split(k,a," ");for(i in a)S[a[i]]=1} NF{n++; if(S[n]) print}' "$ITEMS" > "$ITEMS.kept" 2>/dev/null && mv "$ITEMS.kept" "$ITEMS"
     kept_n=$(grep -c . "$ITEMS" || true)
-    log "validation : $kept_n/$n_items commentaire(s) gardé(s) ($((n_items - kept_n)) écarté(s))"
+    val_dropped=$((n_items - kept_n))
+    log "validation : $kept_n/$n_items commentaire(s) gardé(s) ($val_dropped écarté(s))"
     if [ "${kept_n:-0}" -eq 0 ]; then
+      write_status "$val_total" "$val_dropped" 0 0
       log "DONE — tous les commentaires écartés par la validation, rien à poster"; rm -f "$DIFFS" "$ITEMS"; exit 0
     fi
   else
@@ -218,6 +228,7 @@ while IFS="$(printf '\t')" read -r cat tok text; do
   fi
 done < "$ITEMS"
 
-log "DONE post !$IID — inline=$posted, individuels=$fell"
+write_status "$val_total" "$val_dropped" "$posted" "$fell"
+log "DONE post !$IID — inline=$posted, individuels=$fell, écartés(validation)=$val_dropped"
 rm -f "$DIFFS" "$ITEMS"
 exit 0

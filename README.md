@@ -190,7 +190,7 @@ Priorité d'affichage : santé `⚠️` > dernier approbateur `🎯` > en retard
   **⏳ Review en cours : !X** si une review tourne, et le résumé « X à approuver · Y en retard · 🎯 Z ».
 - La liste des **MR ouvertes** avec, pour chacune : `✅` grisé (approuvée), `🎯` orange (tu es le dernier),
   `🟡` (à approuver), `🔴` (en attente > seuil). Sous-menu : titre, statut, **🌐 Ouvrir la MR** (seul lien
-  qui ouvre la MR), puis **⏳ Review en cours…** / **📄 Ouvrir le rapport** / `🔧 Pas de review auto`.
+  qui ouvre la MR), puis **⏳ Review en cours…** / **📄 Ouvrir le rapport** / `🔧 Pas de review auto`, et un bilan **💬 X posté(s) · Y écarté(s) par validation**.
 - Actions : **⏸ Mettre le bot en pause** / **▶️ Reprendre** (bascule le fichier `.paused` ; `check.sh`
   ne fait rien tant qu'il existe, launchd continue de tourner → reprise immédiate), **↻ Forcer un check**,
   **🔎 Reviewer ma branche locale**, **📁 Dossier des rapports**,
